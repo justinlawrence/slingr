@@ -34,10 +34,16 @@ fn window(id: &str, workspace: &str, title: &str) -> Window {
     Window {
         id: id.into(),
         workspace: workspace.into(),
+        monitor: "1".into(),
         app: "Brave Browser".into(),
         bundle: "com.brave.Browser".into(),
         title: title.into(),
     }
+}
+
+/// The same window, on the other screen.
+fn window_on(id: &str, workspace: &str, title: &str, monitor: &str) -> Window {
+    Window { monitor: monitor.into(), ..window(id, workspace, title) }
 }
 
 impl FakeWm {
@@ -84,6 +90,9 @@ impl WindowManager for FakeWm {
     }
     fn focus_workspace(&self, _workspace: &str) -> bool {
         true
+    }
+    fn focused_monitor(&self) -> Option<String> {
+        self.window.as_ref().map(|w| w.monitor.clone())
     }
     fn move_window(&self, window_id: &str, workspace: &str) -> bool {
         self.calls.borrow_mut().push(Call::MoveById(window_id.into(), workspace.into()));
@@ -232,6 +241,7 @@ fn refuses_to_sling_its_own_dialog() {
     wm.window = Some(Window {
         id: "19668".into(),
         workspace: "infra".into(),
+        monitor: "1".into(),
         app: "System Events".into(),
         bundle: "com.apple.systemevents".into(),
         title: String::new(),
@@ -787,4 +797,19 @@ fn a_setting_is_never_described_as_empty() {
     let all = seen.0.borrow().iter().find(|r| r.id == ALL).cloned().expect("offered");
     assert_eq!(all.marker.as_deref(), Some("setting"));
     assert!(all.count.is_none());
+}
+
+
+#[test]
+fn a_follower_on_another_screen_is_left_alone() {
+    // Clicking a terminal on the second display must not drag the windows you
+    // were working beside on the first one across to it.
+    let mut wm = FakeWm::new();
+    wm.all.push(window_on("42", "2", "tytoctl", "2"));
+
+    let following = vec!["7695".to_string(), "42".to_string()];
+    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], &following, &[]);
+
+    let brought: Vec<&str> = run.brought.iter().map(|(w, _)| w.id.as_str()).collect();
+    assert_eq!(brought, vec!["7695"], "only the follower sharing this screen should move");
 }

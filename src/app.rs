@@ -93,6 +93,7 @@ pub fn follow_to(
     target: &str,
     already_moved: &str,
     only_from: Option<&str>,
+    only_on: Option<&str>,
 ) -> Vec<(Window, Outcome)> {
     if follow.is_empty() {
         return Vec::new();
@@ -106,6 +107,7 @@ pub fn follow_to(
             && w.id != already_moved
             && w.workspace != target
             && only_from.is_none_or(|from| w.workspace == from)
+            && only_on.is_none_or(|monitor| w.monitor == monitor)
     }) {
         let outcome = if wm.move_window(&w.id, target) {
             Outcome::Moved { to: target.to_string(), created: false }
@@ -255,8 +257,9 @@ pub fn run(
     }
 
     let created = counts.as_ref().map(|c| !c.contains_key(&target)).unwrap_or(false);
-    // Anywhere: moving by id neither changes focus nor restores a workspace.
-    let brought = follow_to(wm, follow, &target, &window.id, None);
+    // Anywhere on this screen: moving by id costs nothing, but a follower on
+    // another display is beside work of its own and should stay there.
+    let brought = follow_to(wm, follow, &target, &window.id, None, Some(&window.monitor));
     Run {
         window: Some(window.clone()),
         counts: counts.clone(),
@@ -378,6 +381,10 @@ pub fn run_many(
         return Batch::stopped(Outcome::Heading);
     };
 
+    // Noted before the list is consumed: the followers belong to the screen
+    // the batch came from.
+    let on = chosen.first().map(|w| w.monitor.clone());
+
     let mut results = Vec::new();
     for window in chosen {
         let outcome = if window.workspace == target {
@@ -391,7 +398,7 @@ pub fn run_many(
         results.push((window, outcome));
     }
 
-    let brought = follow_to(wm, follow, &target, "", None);
+    let brought = follow_to(wm, follow, &target, "", None, on.as_deref());
     results.extend(brought);
 
     Batch { target: Some(target), results, aborted: None }

@@ -49,60 +49,102 @@ tasks like `house` and `mail`, and tabs planned but not yet open.
 
 ## What sling does
 
-One key (`ctrl-alt-cmd-s`, bound to layer 5 on the Voyager). It reads the
-focused window, offers the task list grouped by project, and moves the window
-to whichever is chosen.
-
-The list distinguishes three states, because "file this with its mates" and
-"start a new task" are different intentions:
+One key (`ctrl-alt-cmd-s`, bound to layer 5 on the Voyager) opens a panel. It
+reads the focused window, offers the task list, and moves the window to
+whichever task is chosen.
 
 ```
-＋  new workspace…
-──────  tyto  ──────
-✓  t-forms                        holds windows already
-   t-pair                         a known task, nothing in it yet
-──────  art corner  ──────
-●  ac-app  (this window is here)  where this window is now
+Slinger ◈
+[icon] Brave Browser   Inbox (578) — Arty Corner Mail
+[ sling once ] sling many                    ＋ new workspace
+❯ type to filter tasks
+HERE
+  ✓  ac-mail                              3 windows
+  ✓  Show on all workspaces
+TYTO
+  ★  t-pair                               1 window
+     t-forms                              empty
 ```
 
-`＋ new workspace…` prompts for a name, translates it to something AeroSpace
-accepts, and moves the window there — AeroSpace creates the workspace on
-demand. Naming happens when you know what the task is, not when the window
-opens, which is why new windows are not auto-filed.
+The window being slung is named once, at the top, with its application's icon —
+a browser title is seven fragments long and repeating it on every row tells you
+nothing. `HERE` opens with whichever answer is true: the workspace the window
+is in, or `Show on all workspaces` if it is set. The two are mutually
+exclusive, because a window shown everywhere is not in any one place.
+
+Tasks are grouped by project. Pinned tasks rise within their folder rather than
+forming a group of their own — pinning is about the tab, not the project it
+belongs to. `empty` distinguishes a known task with nothing in it yet from one
+that already holds windows, because "file this with its mates" and "start
+something new" are different intentions.
+
+`＋ new workspace` sits on the tab line rather than in the list: it is an
+action, not a destination. Naming happens when you know what the task is, not
+when the window opens, which is why new windows are never auto-filed.
 
 ## Draining
 
 A workspace that has collected dozens of windows is a transitional state, not a
-load to design for: restoring it costs about three seconds per window and
-blocks everything else meanwhile. Draining is how you get out of it — select a
-batch, send it to one task, repeat.
+load to design for. `sling many` is how you get out of it: select a batch, send
+it to one task, repeat.
 
-It is the same key and the same dialog as a single sling, with a mode row on
-the first line. Two modes rather than two commands: the fast path stays one
-dialog on the focused window, and the batch path is one pick away. A separate
-invocation was tried first and rejected — the decision to move one window or
-several belongs inside the dialog, not before it.
+Two modes, two tabs, one key. The fast path stays a single question about the
+focused window; the batch path is one tab away. Both tabs are always shown and
+only which is active changes — a row that means "switch" was tried first and
+was never honest about being a mode.
 
-The window list covers every workspace rather than only the focused one, so a
-task can be gathered from anywhere. Rows are addressed by number, not by
-their text: browser windows routinely share a title, and a chosen line comes
-back from the dialog trimmed, so matching on the label is both ambiguous and
-fragile. Where a title does collide, the window id is shown alongside it.
+The window list covers every workspace, grouped by the one each window is in,
+and a whole group can be taken at once: the heading carries none/some/all. So
+the folders are in the answer rather than being a question of their own. A
+drill-down was tried and removed — it made taking most of a folder, or windows
+from two folders, impossible.
 
-A window that will not take focus — minimised, or closed since the list was
-drawn — is skipped and reported, never silently left behind and never allowed
-to strand the rest of the batch.
+Rows are addressed by id, never by their text. Browser windows routinely share
+a title, and where one does collide the window id is shown beside it.
+
+Every step after a mode's front door carries no tabs. Switching mode halfway
+through answering "which windows" is not something anyone means to do.
+
+## Two screens
+
+The second display is not part of the task rotation: it watches `tytoctl` and
+is glanced at, not switched between. Nothing declares this — it falls out of
+one rule.
+
+A window that belongs everywhere belongs everywhere **on its own screen**.
+Followers move only when the workspace change is on the monitor they are
+already on, so clicking the terminal on the second display cannot drag the
+windows you were working beside on the first one across to it.
+
+That also means naming the second screen's workspace would be harmless but
+pointless: it would join the sling list, the cycle and the tab list, inviting
+you to sling things there, when the whole point is that it is an instrument
+panel rather than a task.
 
 ## Why it is built this way
 
-The flow is written against two traits, `WindowManager` and `Prompt`, so it
-can be driven without AeroSpace or a screen. That is not ceremony: the bug
-that moved the wrong window is a property of *ordering* — focus must happen
-before the move — and ordering is only observable if the calls can be
-recorded. See `tests/flow.rs`.
+The flow is written against two traits, `WindowManager` and `Prompt`, so it can
+be driven without a window manager or a screen. That is not ceremony — it is
+what lets a bug about *ordering* be pinned down, and what made replacing the
+entire front end a question of adding one implementation.
 
-`picker.rs` holds the rules with no I/O in them (parsing, naming, grouping,
-menu construction) and is tested directly.
+`picker.rs` holds the rules with no I/O in them — parsing, naming, grouping,
+menu construction — and is tested directly.
+
+The panel is a separate process that reads rows on stdin and prints chosen ids.
+All the thinking stays in Rust, under test; the Swift is presentation only. It
+is an `NSPanel` because AeroSpace does not manage panels: it belongs to no
+workspace, is never hidden or moved, and cannot be slung by accident. It is
+also non-activating, so AeroSpace still reports the window being slung as
+focused while the panel is up.
+
+Its colours come from the terminal's, not from a palette of its own. Omarchy
+plugins are theme-aware by convention, and there is no system theme to read on
+macOS — but there is the terminal this all revolves around.
+
+The AppleScript dialog remains as an automatic fallback when the panel is not
+built. It can only take flat strings, which is why rows are rendered as well as
+structured.
 
 ## The action log
 
@@ -129,42 +171,63 @@ in advance. `sling stats` summarises it. The questions it should answer:
 
 ## Windows that belong everywhere
 
-`∞  all workspaces` is not a destination but a standing instruction. The window
-stays where it is and joins a follow list; the next time anything is slung, the
-list comes too, and focus is handed back to the window you were moving.
+Some windows are not part of any one task: herdr, WhatsApp. `Show on all
+workspaces` is a standing instruction rather than a destination, so it reads as
+an ordinary row that carries a tick instead of an action that announces itself.
+The window stays where it is and joins a follow list.
 
-This is emulated stickiness and the cheapest form of it — poor man's
-persistence. It follows on a sling, not on a workspace switch, because
-following every switch means moving windows on every switch, and moving a
-window *into* the visible workspace is the expensive direction. The hook for
-that exists (`exec-on-workspace-change` with `AEROSPACE_FOCUSED_WORKSPACE`, and
-`sling follow` is written for it), but it is re-entrant by construction —
-moving a window changes focus, which changes workspace, which fires the hook —
-so it needs a guard and a measurement first, not just a config line.
+AeroSpace has no sticky windows — the string does not appear anywhere in its
+binary, and issue #2 has been open since the beginning — so this is emulation.
+It is cheap because a window is moved by naming it: no focus change, no
+workspace change, no restore. Bringing two followers takes about 100ms, and
+raises no event of its own, so the hook that triggers it cannot feed itself.
 
-Window ids are not stable across an application restart. Accepted: the list is
-cheap to rebuild, `sling following` shows it, and re-tagging is one pick. When
-the tooling improves this becomes a tidy-up rather than a design problem.
+On AeroSpace 0.12 the same two windows took 46 seconds and the design had to
+avoid doing it at all. That constraint is gone, and with it the rule that
+followers could only be fetched from the workspace on screen.
+
+What remains is the screen rule, which is about intent rather than cost: a
+follower moves only within the monitor it is on. See *Two screens*.
+
+Window ids do not survive the application restarting. Accepted: `sling
+following` shows the list and re-tagging is one pick.
 
 ## The other direction
 
-Slinging files a window under a task. `sling watch` closes the loop: change
-herdr tab, and AeroSpace follows to the matching workspace.
+Slinging files a window under a task. The reverse closes the loop: change herdr
+tab, and AeroSpace follows to the matching workspace.
 
-herdr pushes a `tab.focused` event over its session socket, so the watcher
-subscribes rather than polls. (The bundled API schema claims only three pane
-events are subscribable; that is wrong — see `docs/FINDINGS.md`.) A polling
-fallback is kept for when the socket is not available.
+Nothing stays resident. Both halves are callbacks, run by something already
+running:
 
-The rule that matters is when *not* to switch. AeroSpace shows a workspace by
-restoring its windows, so switching to an empty one blanks the screen and the
-way back costs a full restore. The watcher therefore only follows a tab whose
-task already holds windows. That is deliberately conservative and it resolves
-itself: a task starts pulling as soon as something has been slung into it.
+- AeroSpace's `exec-on-workspace-change` runs `sling follow`, so windows that
+  belong everywhere catch up on any workspace change, whatever caused it.
+- A herdr plugin's `tab.focused` hook runs `sling goto`.
 
-Whether this is the intuitive rule is not settled. It is the safe one, which
-is the right place to start — the failure it prevents is loud and slow, and
-the failure it causes is nothing happening.
+A resident watcher was written first and removed. It was worse on the merits:
+it died during a debugging session and stayed dead, and a watcher that has
+quietly stopped is indistinguishable from a broken follow list. `sling watch`
+survives for anywhere the callbacks cannot be installed.
+
+The one thing a daemon did better is coalescing, so `goto` takes a lock — a
+hook spawns a process per event, and herdr has been reported to emit focus
+events in bursts.
+
+The rule that matters is when *not* to switch: only into a workspace that
+already holds windows. Switching to an empty one blanks the screen. That is
+deliberately conservative and resolves itself, since a task starts pulling as
+soon as something has been slung into it.
+
+## Surviving a restart
+
+AeroSpace does not remember which workspace a window belongs to. Restart it and
+everything lands in whatever each monitor happens to be showing — an evening's
+sorting lost, which is exactly what happened during the upgrade.
+
+`sling snapshot` writes the mapping and `sling restore` replays it, matching by
+window id first and then by application and title, so a window whose
+application has restarted still finds its way home. The snapshot is taken
+automatically on every workspace change.
 
 ## Configuration that AeroSpace now carries itself
 
@@ -183,18 +246,20 @@ ctrl-alt-cmd-n = 'list-workspaces --monitor focused --empty no | workspace --std
 
 ## Not built yet
 
-- **Pinned destinations.** The dialog lists tasks by project prefix, which is
-  stable but not ordered by use. The action log already records where windows
-  actually go, so a pinned section at the top is a small change to
-  `build_menu` — no new UI needed. A richer picker (pinning by drag, a kanban
-  layout) needs a real panel, since `choose from list` is a flat list.
+- **Live state.** The list is a snapshot taken before the panel opens. It could
+  subscribe to AeroSpace's `focused-workspace-changed` and `window-detected`
+  and update while open.
+- **Feedback instead of vanishing.** Pinning and `Show on all workspaces` close
+  the panel; a panel can show the new state instead, which a dialog never
+  could.
+- **Window previews.** `CGWindowListCreateImage` would let you recognise a
+  window rather than parse its title.
+- **Drag** — to reorder pins, or a window onto a task. The original metaphor,
+  finally literal.
+- **An inline rename field**, so `＋ new workspace` stops bouncing out to an
+  AppleScript text dialog — the last piece of the old UI still in the flow.
 - **Routing rules** — Chrome to `agents`, the `justin@artycorner.uk` profile to
   `ac-*`. Written once, caused a window-flashing loop, removed. Re-add one at a
   time, specific first, with no fall-through.
-- **A columned picker.** `choose from list` is a fixed single-column AppleScript
-  control, so a kanban layout needs a SwiftUI panel, a Raycast extension or a
-  local web page. Deferred until the grouped list has been lived with.
-- **Claude artifact routing.** Artifacts open into whatever window is in front,
-  losing their provenance. Intended mechanism: a per-herdr-pane `BROWSER`
-  variable pointing at a wrapper that opens the tab in that task's window.
-  Needs confirming that Claude Code honours `BROWSER`.
+- **`persistent-workspaces` could replace `known` and `seen.json`** now that
+  AeroSpace keeps empty workspaces alive itself.

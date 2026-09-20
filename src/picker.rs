@@ -44,6 +44,10 @@ pub const HERE: &str = "●";
 pub struct Window {
     pub id: String,
     pub workspace: String,
+    /// Which screen it is on. A window that belongs everywhere belongs
+    /// everywhere *on its own screen*; dragging it to another one takes it
+    /// away from the work it was sitting beside.
+    pub monitor: String,
     pub app: String,
     pub title: String,
     /// Bundle id, so a front end can show the application's icon instead of
@@ -62,16 +66,17 @@ impl Window {
     }
 }
 
-/// Read one `%{window-id}|%{workspace}|%{app-name}|%{app-bundle-id}|%{window-title}`
+/// Read one
+/// `%{window-id}|%{workspace}|%{monitor-id}|%{app-name}|%{app-bundle-id}|%{window-title}`
 /// row.
 ///
-/// Titles contain `|` often enough to matter, so only the first four
+/// Titles contain `|` often enough to matter, so only the first five
 /// separators are significant and the title keeps whatever it holds.
 pub fn parse_window(line: &str) -> Option<Window> {
     if line.trim().is_empty() {
         return None;
     }
-    let mut parts = line.splitn(5, '|');
+    let mut parts = line.splitn(6, '|');
     let id = parts.next()?.trim().to_string();
     if id.is_empty() {
         return None;
@@ -80,6 +85,7 @@ pub fn parse_window(line: &str) -> Option<Window> {
     Some(Window {
         id,
         workspace,
+        monitor: parts.next().unwrap_or("").trim().to_string(),
         app: parts.next().unwrap_or("").trim().to_string(),
         bundle: parts.next().unwrap_or("").trim().to_string(),
         title: parts.next().unwrap_or("").trim().to_string(),
@@ -435,10 +441,11 @@ mod tests {
 
     #[test]
     fn keeps_pipes_that_belong_to_the_title() {
-        let w = parse_window("11513|infra|Brave Browser|com.brave.Browser|Inbox | Mail - Brave")
+        let w = parse_window("11513|infra|1|Brave Browser|com.brave.Browser|Inbox | Mail - Brave")
             .unwrap();
         assert_eq!(w.id, "11513");
         assert_eq!(w.workspace, "infra");
+        assert_eq!(w.monitor, "1");
         assert_eq!(w.app, "Brave Browser");
         assert_eq!(w.bundle, "com.brave.Browser");
         assert_eq!(w.title, "Inbox | Mail - Brave");
@@ -446,7 +453,7 @@ mod tests {
 
     #[test]
     fn tolerates_a_window_with_no_title() {
-        let w = parse_window("19354|infra|Brave Browser|com.brave.Browser|").unwrap();
+        let w = parse_window("19354|infra|1|Brave Browser|com.brave.Browser|").unwrap();
         assert_eq!(w.title, "");
         assert_eq!(w.label(), "Brave Browser");
     }
@@ -455,7 +462,7 @@ mod tests {
     fn rejects_rows_that_are_not_windows() {
         assert!(parse_window("").is_none());
         assert!(parse_window("   ").is_none());
-        assert!(parse_window("|infra|Brave|com.brave.Browser|x").is_none());
+        assert!(parse_window("|infra|1|Brave|com.brave.Browser|x").is_none());
     }
 
     #[test]

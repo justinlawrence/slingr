@@ -252,8 +252,10 @@ fn follow_now() -> Result<()> {
         say!("AeroSpace did not answer");
         return Ok(());
     };
-    // Explicitly asked for, so reach anywhere — the cost is the caller's call.
-    let brought = app::follow_to(&aero, &follow.ids(), &here, "", None);
+    // Only the screen being worked on. Clicking a window on another display
+    // must not pull everything across to it.
+    let on = aero.focused_monitor();
+    let brought = app::follow_to(&aero, &follow.ids(), &here, "", None, on.as_deref());
     if !brought.is_empty() {
         say!("brought {} to {here}", brought.len());
     }
@@ -388,6 +390,7 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
                 return;
             };
             let Some(out) = child.stdout else { return };
+            use sling::aerospace::WindowManager;
             let aero = AeroSpace::default();
             let mut last = String::new();
             for line in BufReader::new(out).lines() {
@@ -401,7 +404,8 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
                 last = workspace.clone();
                 let follow = FollowList::load();
                 if !follow.windows.is_empty() {
-                    app::follow_to(&aero, &follow.ids(), &workspace, "", None);
+                    let on = aero.focused_monitor();
+                    app::follow_to(&aero, &follow.ids(), &workspace, "", None, on.as_deref());
                 }
                 let _ = snapshot();
             }
@@ -485,7 +489,9 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
                 // AeroSpace hides everything not in the active workspace, and
                 // the terminal lives in exactly one.
                 let t0 = Instant::now();
-                let brought = app::follow_to(aero, &follow.ids(), &target, "", Some(&here));
+                let on = aero.focused_monitor();
+                let brought =
+                    app::follow_to(aero, &follow.ids(), &target, "", Some(&here), on.as_deref());
                 let follow_ms = t0.elapsed().as_millis();
                 if follow_ms > 8000 {
                     say!(

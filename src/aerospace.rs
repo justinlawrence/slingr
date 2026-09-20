@@ -19,7 +19,7 @@ pub const BIN: &str = "/opt/homebrew/bin/aerospace";
 pub const TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const FORMAT: &str =
-    "%{window-id}|%{workspace}|%{app-name}|%{app-bundle-id}|%{window-title}";
+    "%{window-id}|%{workspace}|%{monitor-id}|%{app-name}|%{app-bundle-id}|%{window-title}";
 
 /// What sling needs from a window manager. A trait so the flow can be tested
 /// without a running AeroSpace — see `tests/flow.rs`.
@@ -37,6 +37,8 @@ pub trait WindowManager {
     fn focus_workspace(&self, workspace: &str) -> bool;
     /// Move a window by id, without focusing it first.
     fn move_window(&self, window_id: &str, workspace: &str) -> bool;
+    /// The screen currently being worked on.
+    fn focused_monitor(&self) -> Option<String>;
 }
 
 /// Why a call produced nothing. Kept apart from `None` so that "AeroSpace is
@@ -169,6 +171,11 @@ impl WindowManager for AeroSpace {
 
     fn focus_workspace(&self, workspace: &str) -> bool {
         self.run(&["workspace", workspace]).is_some()
+    }
+
+    fn focused_monitor(&self) -> Option<String> {
+        let out = self.run(&["list-monitors", "--focused", "--format", "%{monitor-id}"])?;
+        Some(out.lines().next()?.trim().to_string())
     }
 
     /// The whole reason this is cheap. Focusing a window drags the view to its
