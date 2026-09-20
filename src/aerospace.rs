@@ -39,6 +39,10 @@ pub trait WindowManager {
     fn move_window(&self, window_id: &str, workspace: &str) -> bool;
     /// The screen currently being worked on.
     fn focused_monitor(&self) -> Option<String>;
+    /// Every workspace AeroSpace knows about, empty ones included. With
+    /// `persistent-workspaces` set this is the whole task list, which is why
+    /// sling no longer keeps one of its own.
+    fn all_workspaces(&self) -> Option<Vec<String>>;
 }
 
 /// Why a call produced nothing. Kept apart from `None` so that "AeroSpace is
@@ -171,6 +175,11 @@ impl WindowManager for AeroSpace {
 
     fn focus_workspace(&self, workspace: &str) -> bool {
         self.run(&["workspace", workspace]).is_some()
+    }
+
+    fn all_workspaces(&self) -> Option<Vec<String>> {
+        let out = self.run(&["list-workspaces", "--all"])?;
+        Some(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
     }
 
     fn focused_monitor(&self) -> Option<String> {

@@ -156,10 +156,13 @@ pub fn run(
     }
 
     let counts = wm.window_counts();
+    // Everything AeroSpace knows about, which with persistent-workspaces is
+    // every task — including the ones holding nothing yet.
+    let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
     let menu = picker::build_menu(
         counts.as_ref(),
         &cfg.known,
-        cached,
+        &[cached, &known_to_aerospace].concat(),
         &window.workspace,
         &cfg.order.prefixes,
         &cfg.labels,
@@ -338,10 +341,11 @@ pub fn run_many(
         return Batch::stopped(Outcome::Cancelled);
     }
 
+    let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
     let targets = picker::build_menu(
         Some(&counts),
         &cfg.known,
-        cached,
+        &[cached, &known_to_aerospace].concat(),
         "",
         &cfg.order.prefixes,
         &cfg.labels,

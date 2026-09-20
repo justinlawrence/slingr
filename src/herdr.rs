@@ -49,6 +49,16 @@ struct Tab {
     label: String,
     #[serde(default)]
     focused: bool,
+    #[serde(default)]
+    tab_id: String,
+}
+
+/// A tab, as sling cares about it: the task it names and whether it is showing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabRef {
+    pub task: String,
+    pub id: String,
+    pub focused: bool,
 }
 
 /// Task names from a `herdr tab list` reply.
@@ -141,6 +151,42 @@ pub fn focused() -> Option<String> {
     parse_focused(&ask_tab_list()?)
 }
 
+/// The tab naming a given task, if there is one.
+///
+/// Not every workspace has a tab — `house`, `mail` and the infra screen are
+/// tasks with no agent behind them — so a miss is ordinary and means do
+/// nothing.
+pub fn tab_for(json: &str, task: &str) -> Option<TabRef> {
+    let reply = serde_json::from_str::<Reply>(json).ok()?;
+    reply
+        .result
+        .tabs
+        .into_iter()
+        .filter(|t| !t.tab_id.is_empty())
+        .map(|t| TabRef {
+            task: sanitise_workspace(&t.label),
+            id: t.tab_id,
+            focused: t.focused,
+        })
+        .find(|t| t.task == task)
+}
+
+/// Bring a tab to the front. False if herdr would not, or could not.
+pub fn focus_tab(id: &str) -> bool {
+    Command::new(bin())
+        .args(["tab", "focus", id])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// The tab naming a task, asked of herdr.
+pub fn tab_named(task: &str) -> Option<TabRef> {
+    tab_for(&ask_tab_list()?, task)
+}
+
 /// Ask herdr for its tabs. Empty if herdr is not installed or not answering —
 /// sling works without it, just with a shorter list.
 pub fn tasks() -> Vec<String> {
@@ -184,6 +230,24 @@ mod tests {
     fn an_unnamed_focused_tab_names_no_task() {
         let numbered = r#"{"result":{"tabs":[{"label":"1","focused":true}]}}"#;
         assert!(parse_focused(numbered).is_none());
+    }
+
+    #[test]
+    fn finds_the_tab_that_names_a_task() {
+        let found = tab_for(SAMPLE, "t-gant-workload").expect("there is one");
+        assert_eq!(found.id, "w7:t4");
+        assert!(found.focused);
+
+        let other = tab_for(SAMPLE, "arb-lsp").expect("there is one");
+        assert_eq!(other.id, "w7:t8");
+        assert!(!other.focused);
+    }
+
+    #[test]
+    fn a_task_with_no_tab_is_ordinary() {
+        // house, mail and the infra screen are tasks with nobody behind them.
+        assert!(tab_for(SAMPLE, "house").is_none());
+        assert!(tab_for("not json", "t-mail").is_none());
     }
 
     #[test]

@@ -192,10 +192,22 @@ follower moves only within the monitor it is on. See *Two screens*.
 Window ids do not survive the application restarting. Accepted: `sling
 following` shows the list and re-tagging is one pick.
 
-## The other direction
+## Both directions
 
-Slinging files a window under a task. The reverse closes the loop: change herdr
-tab, and AeroSpace follows to the matching workspace.
+Slinging files a window under a task. The rest keeps the pair in step: a task
+is a herdr tab *and* a workspace, so arriving at either brings the other.
+
+- herdr tab changes → AeroSpace goes to the matching workspace
+- AeroSpace workspace changes → herdr focuses the matching tab, however you
+  got there: a keybinding, the menu bar, or clicking a window
+
+Not every workspace has a tab — `house`, `mail` and the second screen are tasks
+with nobody behind them — so a miss is ordinary and means do nothing.
+
+The pair cannot chase its own tail. Focusing a tab that is already focused is
+skipped, and were it not, the return trip finds the workspace already correct
+and stops there. Both sides are idempotent, so the worst case is one wasted
+round trip rather than an oscillation.
 
 Nothing stays resident. Both halves are callbacks, run by something already
 running:
@@ -232,8 +244,27 @@ automatically on every workspace change.
 ## Configuration that AeroSpace now carries itself
 
 `config-version = 2` unlocks `persistent-workspaces`, which keeps named
-workspaces alive while empty. That is most of what `known` and `seen.json` were
-for, and it is generated from all three task sources at once.
+workspaces alive while empty. That is what `known` and `seen.json` were for, so
+sling no longer keeps a list of its own: `sling sync` gathers every task from
+herdr's tabs, `workspaces.toml`, AeroSpace itself and the old remembered-names
+file, and writes them into a block it owns:
+
+```toml
+# sling:begin — managed by `sling sync`, edits here are overwritten
+persistent-workspaces = [ … ]
+# sling:end
+```
+
+It runs automatically whenever a task is created, so a new one exists
+immediately — switchable, in AeroSpace's own menu bar, and offered by name.
+
+Two things about writing someone else's config file, both learned by breaking
+it. The block must go above the first table header: appended to the end it
+lands inside whatever section is last, and `persistent-workspaces` inside
+`[mode.service.binding]` parses as a keybinding with unintelligible modifiers.
+And a hand-written list has to be absorbed rather than added to, because TOML
+rejects the whole file for a duplicate key — at which point AeroSpace silently
+keeps its previous config and reports the version it fell back to.
 
 It comes with a catch worth remembering: `workspace next|prev` walks *all*
 workspaces including empty ones, so making twenty-nine of them persistent would

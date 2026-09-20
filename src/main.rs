@@ -52,6 +52,9 @@ enum Cmd {
         #[arg(long, default_value_t = 250)]
         settle: u64,
     },
+    /// Write every known task into AeroSpace's `persistent-workspaces`, so a
+    /// task exists before anything is in it.
+    Sync,
     /// Record where every window is, so a restart can be undone.
     Snapshot,
     /// Put every window back where the last snapshot had it.
@@ -90,6 +93,7 @@ fn main() -> Result<()> {
         Some(Cmd::Watch { dry_run, poll, interval, settle }) => {
             watch(dry_run, poll, interval, settle)
         }
+        Some(Cmd::Sync) => sync_workspaces(true),
         Some(Cmd::Snapshot) => { snapshot()?; Ok(()) }
         Some(Cmd::Restore { dry_run }) => restore(dry_run),
         Some(Cmd::Goto) => goto_now(),
@@ -259,6 +263,20 @@ fn follow_now() -> Result<()> {
     if !brought.is_empty() {
         say!("brought {} to {here}", brought.len());
     }
+
+    // The other half of the pairing. A task is a herdr tab and a workspace, so
+    // arriving at the workspace should bring the tab with it — whether you got
+    // here by keybinding, by the menu bar, or by clicking a window.
+    //
+    // This cannot chase its own tail: focusing a tab that is already focused
+    // is skipped, and were it not, the return trip finds the workspace already
+    // correct and stops there.
+    if let Some(tab) = sling::herdr::tab_named(&here) {
+        if !tab.focused && sling::herdr::focus_tab(&tab.id) {
+            say!("herdr -> {here}");
+        }
+    }
+
     let _ = snapshot();
     Ok(())
 }
@@ -288,16 +306,12 @@ fn record_one(run: Run, cache: &mut NameCache, follow: &mut FollowList) -> Resul
     }
     ActionLog::default().append(&entry)?;
 
-    // Remember every name we saw, plus any task just invented, so it survives
-    // the workspace emptying out.
-    let mut seen: Vec<String> =
-        run.counts.map(|c| c.keys().cloned().collect()).unwrap_or_default();
-    if let Outcome::Moved { to, .. } = &run.outcome {
-        seen.push(to.clone());
+    // A task invented just now has to exist before it can be switched to, so
+    // AeroSpace is told about it rather than sling remembering it.
+    if let Outcome::Moved { created: true, .. } = &run.outcome {
+        let _ = sync_workspaces(false);
     }
-    if cache.merge(&seen) {
-        cache.save()?;
-    }
+    let _ = cache;
     Ok(())
 }
 
@@ -329,11 +343,10 @@ fn record_many(batch: Batch, cache: &mut NameCache, follow: &mut FollowList) -> 
         }
     }
 
-    if let Some(to) = batch.target {
-        if moved > 0 && cache.merge(&[to]) {
-            cache.save()?;
-        }
+    if batch.results.iter().any(|(_, o)| matches!(o, Outcome::Moved { created: true, .. })) {
+        let _ = sync_workspaces(false);
     }
+    let _ = cache;
     Ok(())
 }
 
@@ -542,6 +555,54 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
         }
     }
     let _ = ActionLog::watch().append(&entry);
+}
+
+/// Teach AeroSpace every task we know about, from every source at once.
+///
+/// This is what lets a brand-new task be switched to, appear in AeroSpace's
+/// menu bar, and be offered by name — without sling keeping a list of its own.
+fn sync_workspaces(loud: bool) -> Result<()> {
+    use sling::aerospace::WindowManager;
+
+    let cfg = Config::load()?;
+    let aero = AeroSpace::default();
+
+    let mut names: Vec<String> = Vec::new();
+    let mut add = |candidates: Vec<String>| {
+        for name in candidates {
+            if !name.is_empty() && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    };
+    add(sling::herdr::tasks());
+    add(cfg.known.clone());
+    add(aero.all_workspaces().unwrap_or_default());
+    // Whatever the old remembered-names file still holds, so nothing that was
+    // invented before this existed is lost.
+    add(store::NameCache::load().workspaces);
+    names.sort();
+
+    let text = std::fs::read_to_string(sling::aeroconf::path()).unwrap_or_default();
+    if !sling::aeroconf::declares_version_2(&text) {
+        say!("~/.aerospace.toml needs `config-version = 2` before persistent-workspaces works");
+        return Ok(());
+    }
+
+    let changed = sling::aeroconf::sync(&names)?;
+    if changed {
+        let _ = std::process::Command::new(sling::aerospace::BIN)
+            .arg("reload-config")
+            .status();
+    }
+    if loud {
+        say!(
+            "{} tasks {}",
+            names.len(),
+            if changed { "written and reloaded" } else { "already up to date" }
+        );
+    }
+    Ok(())
 }
 
 /// Write down where everything is. Cheap enough to do after every change.

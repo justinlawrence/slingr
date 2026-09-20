@@ -94,6 +94,9 @@ impl WindowManager for FakeWm {
     fn focused_monitor(&self) -> Option<String> {
         self.window.as_ref().map(|w| w.monitor.clone())
     }
+    fn all_workspaces(&self) -> Option<Vec<String>> {
+        self.counts.as_ref().map(|c| c.keys().cloned().collect())
+    }
     fn move_window(&self, window_id: &str, workspace: &str) -> bool {
         self.calls.borrow_mut().push(Call::MoveById(window_id.into(), workspace.into()));
         self.move_succeeds && !self.focus_refuses.iter().any(|id| id == window_id)

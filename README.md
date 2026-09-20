@@ -38,6 +38,7 @@ draws the dialog; without it nothing appears.
 | | |
 |---|---|
 | `sling` | the picker |
+| `sling sync` | teach AeroSpace every task, so empty ones persist |
 | `sling snapshot` | record where every window is |
 | `sling restore` | put them back after an AeroSpace restart |
 | `sling following` | windows that come along to every task |

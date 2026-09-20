@@ -4,6 +4,7 @@
 //! driven without AeroSpace or a screen. See `docs/SPEC.md` for what this is
 //! for and `docs/FINDINGS.md` for the constraints the design works around.
 
+pub mod aeroconf;
 pub mod aerospace;
 pub mod app;
 pub mod config;
