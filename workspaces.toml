@@ -1,0 +1,33 @@
+# Tasks that are NOT herdr tabs.
+#
+# Every herdr tab is offered automatically — renaming or adding one makes it
+# slingable straight away, with nothing to edit here. This list is for the rest:
+# free-form tasks, and tabs that are planned but do not exist yet.
+#
+# AeroSpace forgets a workspace once it is empty and off screen, so a brand-new
+# task is unreachable until something is already in it. Listing it here offers
+# it in the sling dialog anyway, unmarked until it has windows. Anything you
+# create through "new workspace…" is remembered in
+# ~/.local/state/sling/seen.json and needs no entry here either.
+#
+# Names may only contain [A-Za-z0-9._-]. A "/" hangs AeroSpace on a modal
+# dialog, so herdr's "t/forms" becomes "t-forms" here. See docs/FINDINGS.md.
+
+known = [
+  # planned herdr tabs, not open yet
+  "t-forms", "t-mobile",
+  # not herdr tabs at all
+  "house", "mail", "inbox", "agents", "infra",
+]
+
+# Prefix before the first "-" groups the list. Anything unlisted keeps its
+# prefix as its own heading; anything without a "-" falls under "elsewhere".
+[labels]
+t = "tyto"
+ac = "art corner"
+arb = "arb"
+me = "me"
+
+# Groups appear in this order; the rest follow alphabetically.
+[order]
+prefixes = ["t", "ac", "me", "arb"]

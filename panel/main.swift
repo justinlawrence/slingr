@@ -1,0 +1,745 @@
+// sling-panel — the picker, as a floating panel.
+//
+// Presentation only. Every decision belongs to the Rust side: this reads a
+// list on stdin, shows it, and prints what was chosen. That keeps the logic
+// under test and the window code dumb.
+//
+// It is an NSPanel rather than a window on purpose. AeroSpace does not manage
+// panels, so this belongs to no workspace, is never hidden, never moved, and
+// cannot be slung by accident — unlike the System Events dialog it replaces.
+
+import AppKit
+import SwiftUI
+
+// MARK: - what Rust sends
+
+struct Item: Decodable, Identifiable, Hashable {
+    let id: String
+    let label: String
+    var section: String?
+    var count: Int?
+    /// "here" marks where the window is now; "action" is a row that does
+    /// something rather than naming a task.
+    var marker: String?
+    var pinned: Bool?
+    var detail: String?
+    var active: Bool?
+    var bundle: String?
+}
+
+/// Application icons, looked up once each. The icon says which application a
+/// window belongs to far faster than its name does, and leaves the row free to
+/// say which *window* it is.
+@MainActor
+enum Icons {
+    private static var cache: [String: NSImage?] = [:]
+
+    static func forBundle(_ id: String?) -> NSImage? {
+        guard let id, !id.isEmpty else { return nil }
+        if let hit = cache[id] { return hit }
+        let icon = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .first?.icon
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+                .map { NSWorkspace.shared.icon(forFile: $0.path) }
+        cache[id] = icon
+        return icon
+    }
+}
+
+struct Palette: Decodable {
+    var background = "#11111b"
+    var foreground = "#cdd6f4"
+    var accent = "#89b4fa"
+    var ok = "#a6e3a1"
+    var warn = "#fab387"
+    var dim = "#6c7086"
+}
+
+struct Request: Decodable {
+    let title: String
+    var subtitle: String?
+    var multi: Bool?
+    var placeholder: String?
+    var theme: Palette?
+    var pinnedFolders: [String]?
+    let items: [Item]
+}
+
+// MARK: - palette
+//
+// Taken from the terminal rather than invented, so the panel belongs to the
+// same world as the windows it appears over. Flat and high contrast, not the
+// usual macOS translucency: this has to read at a glance over tiled windows.
+
+extension Color {
+    init(hex: String, fallback: Color = .gray) {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { self = fallback; return }
+        self.init(
+            .sRGB,
+            red: Double((v >> 16) & 0xff) / 255,
+            green: Double((v >> 8) & 0xff) / 255,
+            blue: Double(v & 0xff) / 255,
+            opacity: 1
+        )
+    }
+}
+
+struct Ink {
+    let base: Color, raised: Color, selected: Color, edge: Color
+    let text: Color, dim: Color, accent: Color, here: Color, pin: Color
+    /// Kept apart from the accent: a warning should not look like a choice.
+    var warn: Color { pin }
+
+    init(_ p: Palette?) {
+        let p = p ?? Palette()
+        base = Color(hex: p.background)
+        text = Color(hex: p.foreground)
+        dim = Color(hex: p.dim)
+        accent = Color(hex: p.accent)
+        here = Color(hex: p.ok)
+        pin = Color(hex: p.warn)
+        // Washes of the foreground over the background, rather than colours of
+        // their own, so every theme keeps its own character.
+        raised = Color(hex: p.foreground).opacity(0.05)
+        selected = Color(hex: p.foreground).opacity(0.11)
+        edge = Color(hex: p.foreground).opacity(0.14)
+    }
+}
+
+/// Set once from the request before any view exists, then only read.
+nonisolated(unsafe) var ink = Ink(nil)
+
+/// Every size in one place, scaled together. Bumping one font and not the
+/// rest is how a panel stops looking like itself.
+struct Type {
+    let scale: Double
+    private func mono(_ size: Double, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size * scale, weight: weight, design: .monospaced)
+    }
+    var body: Font { mono(13) }
+    var small: Font { mono(11) }
+    var title: Font { mono(19, .bold) }
+    var tab: Font { mono(13, .semibold) }
+    var rowName: Font { mono(15, .semibold) }
+    var bigNumber: Font { mono(20, .bold) }
+}
+
+/// The reader's preference, not the program's state, so it lives where macOS
+/// keeps preferences rather than in sling's own files.
+enum Zoom {
+    static let key = "fontScale"
+    static let steps: [Double] = [0.8, 0.9, 1.0, 1.15, 1.3, 1.5, 1.75]
+
+    static func load() -> Double {
+        let stored = UserDefaults.standard.double(forKey: key)
+        return steps.contains(stored) ? stored : 1.0
+    }
+
+    static func save(_ value: Double) {
+        UserDefaults.standard.set(value, forKey: key)
+    }
+
+    static func stepped(from current: Double, by delta: Int) -> Double {
+        let at = steps.firstIndex(of: current) ?? steps.firstIndex(of: 1.0)!
+        return steps[max(0, min(steps.count - 1, at + delta))]
+    }
+}
+
+// MARK: - state
+
+@MainActor
+final class Picker: ObservableObject {
+    @Published var query = ""
+    @Published var cursor = 0
+    @Published var chosen: Set<String> = []
+    @Published var scale = Zoom.load()
+
+    /// Told to the controller so the window can be refitted around the text.
+    var onResize: (() -> Void)?
+
+    func zoom(_ delta: Int) {
+        let next = delta == 0 ? 1.0 : Zoom.stepped(from: scale, by: delta)
+        guard next != scale else { return }
+        scale = next
+        Zoom.save(next)
+        onResize?()
+    }
+
+    let request: Request
+    var multi: Bool { request.multi ?? false }
+    /// Set by the controller; the view has no business exiting the process.
+    var onConfirm: (([String]) -> Void)?
+
+    init(_ request: Request) { self.request = request }
+
+    /// The modes, drawn as tabs rather than listed as rows.
+    var tabs: [Item] { request.items.filter { $0.marker == "tab" } }
+
+    /// Rows that survive the query. Tabs and the new-workspace action are
+    /// drawn in the header, so they never appear among them.
+    var visible: [Item] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return request.items.filter { item in
+            guard item.marker != "tab", item.marker != "subject" else { return false }
+            guard item.id != newAction?.id else { return false }
+            guard !q.isEmpty else { return true }
+            if item.marker == "action" { return false }
+            return matches(q, item.label.lowercased())
+                || matches(q, (item.detail ?? "").lowercased())
+        }
+    }
+
+    /// The tab that is not showing, for the keyboard shortcut.
+    var otherTab: Item? { tabs.first { $0.active != true } }
+
+    /// The row that creates a workspace, lifted out of the list and onto the
+    /// tab line where it reads as an action rather than a destination.
+    var newAction: Item? { request.items.first { $0.id.hasPrefix("＋") || $0.label.hasPrefix("＋") } }
+
+    /// What is being slung, shown at the top rather than squeezed into a
+    /// corner: it is the subject of the whole question.
+    var subject: Item? { request.items.first { $0.marker == "subject" } }
+
+    var pinnedFolders: Set<String> { Set(request.pinnedFolders ?? []) }
+
+    /// Subsequence match, so "tgw" finds "t-gant-workload".
+    private func matches(_ needle: String, _ haystack: String) -> Bool {
+        if haystack.contains(needle) { return true }
+        var i = needle.startIndex
+        for ch in haystack where ch == needle[i] {
+            i = needle.index(after: i)
+            if i == needle.endIndex { return true }
+        }
+        return false
+    }
+
+    func move(_ delta: Int) {
+        let rows = visible
+        guard !rows.isEmpty else { return }
+        cursor = max(0, min(rows.count - 1, cursor + delta))
+    }
+
+    /// Take or drop a whole folder at once. Selecting twenty windows one at a
+    /// time is not sorting, it is data entry.
+    func toggleFolder(_ name: String) {
+        guard multi else { return }
+        let ids = visible.filter { $0.section == name && $0.marker != "action" }.map(\.id)
+        guard !ids.isEmpty else { return }
+        if ids.allSatisfy(chosen.contains) {
+            ids.forEach { chosen.remove($0) }
+        } else {
+            ids.forEach { chosen.insert($0) }
+        }
+    }
+
+    func folderState(_ name: String) -> (all: Bool, some: Bool) {
+        let ids = visible.filter { $0.section == name && $0.marker != "action" }.map(\.id)
+        guard !ids.isEmpty else { return (false, false) }
+        let taken = ids.filter(chosen.contains).count
+        return (taken == ids.count, taken > 0)
+    }
+
+    func toggle() {
+        guard multi, let item = visible[safe: cursor], item.marker != "action" else { return }
+        if chosen.contains(item.id) { chosen.remove(item.id) } else { chosen.insert(item.id) }
+        move(1)
+    }
+
+    /// The heading to draw above the row at `index`, if it starts a group.
+    func headingBefore(_ index: Int) -> String? {
+        let rows = visible
+        guard let section = rows[safe: index]?.section else { return nil }
+        if index == 0 { return section }
+        return rows[safe: index - 1]?.section == section ? nil : section
+    }
+
+    /// A click picks, the way a click should. In multi mode it ticks instead,
+    /// since confirming there means confirming the whole set.
+    func click(_ index: Int) {
+        cursor = index
+        if multi {
+            toggle()
+        } else {
+            onConfirm?(confirm())
+        }
+    }
+
+    func confirm() -> [String] {
+        if multi, !chosen.isEmpty {
+            // Keep the order they were listed in, not the order they were ticked.
+            return request.items.map(\.id).filter { chosen.contains($0) }
+        }
+        guard let item = visible[safe: cursor] else { return [] }
+        return [item.id]
+    }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - view
+
+struct PanelView: View {
+    @ObservedObject var picker: Picker
+
+    private var type: Type { Type(scale: picker.scale) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            list
+            footer
+        }
+        .background(ink.base)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(ink.edge, lineWidth: 1))
+    }
+
+    // A sentence where a label would be, and a title with room to breathe.
+    private var header: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Slinger").font(type.title).tracking(5).foregroundStyle(ink.text)
+                Text("◈").font(type.rowName).foregroundStyle(ink.accent)
+                Spacer()
+            }
+            if let subject = picker.subject {
+                HStack(spacing: 9) {
+                    if let icon = Icons.forBundle(subject.bundle) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 20 * picker.scale, height: 20 * picker.scale)
+                    }
+                    Text(subject.label).font(type.rowName).foregroundStyle(ink.text)
+                    if let title = subject.detail, !title.isEmpty {
+                        Text(title)
+                            .font(type.body)
+                            .foregroundStyle(ink.dim)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            if let note = picker.request.subtitle, !note.isEmpty {
+                HStack {
+                    Text(note).font(type.small).foregroundStyle(ink.warn)
+                    Spacer()
+                }
+            }
+            tabStrip
+
+            HStack(spacing: 8) {
+                Text("❯").font(type.body).foregroundStyle(ink.accent)
+                ZStack(alignment: .leading) {
+                    if picker.query.isEmpty {
+                        Text(picker.request.placeholder ?? "type to filter")
+                            .font(type.body).foregroundStyle(ink.dim.opacity(0.7))
+                    }
+                    Text(picker.query).font(type.body).foregroundStyle(ink.text)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(ink.raised)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    /// Two tabs, because there are exactly two modes and a row pretending to
+    /// be a mode was never honest about it.
+    private var tabStrip: some View {
+        HStack(spacing: 4) {
+            ForEach(picker.tabs) { tab in
+                let on = tab.active == true
+                Text(tab.label)
+                    .font(type.tab)
+                    .tracking(1.5)
+                    .foregroundStyle(on ? ink.text : ink.dim)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(on ? ink.selected : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(on ? ink.accent : .clear)
+                            .frame(height: 2)
+                            .padding(.horizontal, 12)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { if !on { picker.onConfirm?([tab.id]) } }
+            }
+            Spacer()
+            if let make = picker.newAction {
+                Text(make.label)
+                    .font(type.tab)
+                    .foregroundStyle(ink.accent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(ink.edge, lineWidth: 1))
+                    .contentShape(Rectangle())
+                    .onTapGesture { picker.onConfirm?([make.id]) }
+            }
+        }
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(picker.visible.enumerated()), id: \.element.id) { index, item in
+                        if let heading = picker.headingBefore(index) {
+                            sectionHeading(heading)
+                        }
+                        card(item, focused: index == picker.cursor)
+                            .id(item.id)
+                            .onTapGesture { picker.click(index) }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+            .frame(maxHeight: 400)
+            .onChange(of: picker.cursor) { _, _ in
+                if let item = picker.visible[safe: picker.cursor] {
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(item.id, anchor: .center) }
+                }
+            }
+        }
+    }
+
+    /// One heading per group, at the top of it. Filtering can empty a group
+    /// entirely, so this follows what is actually on screen rather than the
+    /// shape of the original list.
+    private func sectionHeading(_ name: String) -> some View {
+        let state = picker.folderState(name)
+        // Pinning lives here rather than on a task: a pinned task would make a
+        // folder of its own, and what changes through the day is the project.
+        return HStack(spacing: 8) {
+            if picker.multi {
+                Text(state.all ? "◉" : (state.some ? "◍" : "○"))
+                    .font(type.rowName)
+                    .foregroundStyle(state.some ? ink.accent : ink.dim)
+                    .contentShape(Rectangle())
+                    .onTapGesture { picker.toggleFolder(name) }
+            }
+            Text(name.uppercased())
+                .font(type.small)
+                .tracking(2)
+                .foregroundStyle(ink.dim)
+                .contentShape(Rectangle())
+                .onTapGesture { if picker.multi { picker.toggleFolder(name) } }
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 14)
+        .padding(.bottom, 3)
+    }
+
+    private func card(_ item: Item, focused: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                if picker.multi && item.marker != "action" {
+                    Text(picker.chosen.contains(item.id) ? "◉" : "○")
+                        .font(type.body)
+                        .foregroundStyle(picker.chosen.contains(item.id) ? ink.accent : ink.dim)
+                }
+                if let icon = Icons.forBundle(item.bundle) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 15 * picker.scale, height: 15 * picker.scale)
+                }
+                if item.marker == "here" || item.active == true {
+                    Text("✓").font(type.rowName).foregroundStyle(ink.accent)
+                } else if item.marker == "setting" {
+                    // A setting that is off: keep the column, lose the tick.
+                    Text("✓").font(type.rowName).foregroundStyle(ink.dim.opacity(0.25))
+                }
+                if item.marker == nil {
+                    Text(item.pinned == true ? "★" : "☆")
+                        .font(type.rowName)
+                        .foregroundStyle(item.pinned == true ? ink.accent : ink.dim.opacity(0.35))
+                        .padding(.horizontal, 2)
+                        .contentShape(Rectangle())
+                        .onTapGesture { picker.onConfirm?(["__pin__:" + item.id]) }
+                }
+
+                Text(item.label)
+                    .font(item.marker == "action" ? type.body : type.rowName)
+                    .foregroundStyle(item.marker == "action" ? ink.accent : ink.text)
+                if let detail = item.detail, !detail.isEmpty {
+                    Text(detail).font(type.small).foregroundStyle(ink.dim).lineLimit(1)
+                }
+
+                Spacer(minLength: 10)
+
+                if let count = item.count, count > 0 {
+                    // The one big number per row, the way the clock gives the
+                    // time. Everything else on the card stays quiet.
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("\(count)").font(type.bigNumber).foregroundStyle(ink.text)
+                        Text(count == 1 ? "window" : "windows")
+                            .font(type.small).foregroundStyle(ink.dim)
+                    }
+                } else if item.marker == nil {
+                    // Only a workspace can be empty. A setting has no windows
+                    // to count, so saying "empty" of it means nothing.
+                    Text("empty").font(type.small).foregroundStyle(ink.dim.opacity(0.7))
+                }
+            }
+
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .background(focused ? ink.selected : ink.raised)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(focused ? ink.accent : .clear)
+                .frame(width: 2.5)
+                .padding(.vertical, 7)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var footer: some View {
+        HStack(spacing: 16) {
+            hint("⇥", "mode")
+            hint("↑↓", "move")
+            if picker.multi { hint("space", "select") }
+            hint("⏎", picker.multi ? "confirm" : "sling")
+            if !picker.multi { hint("⌘p", "pin") }
+            hint("⌘±", "size")
+            hint("esc", "cancel")
+            Spacer(minLength: 12)
+            if picker.multi, !picker.chosen.isEmpty {
+                Text("\(picker.chosen.count) selected").font(type.small).foregroundStyle(ink.accent)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+        .background(ink.raised)
+    }
+
+    private func hint(_ key: String, _ what: String) -> some View {
+        HStack(spacing: 5) {
+            Text(key).font(type.small).foregroundStyle(ink.text)
+            Text(what).font(type.small).foregroundStyle(ink.dim)
+        }
+    }
+}
+
+// MARK: - the panel itself
+
+/// A borderless window refuses key status by default, and a window that cannot
+/// become key receives no keyboard events at all — no typing, no arrows, no
+/// escape. Overriding this is what makes the panel usable rather than
+/// decorative.
+final class KeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    /// Still not main: this must not become the active application, or it
+    /// would take the place of the window being slung.
+    override var canBecomeMain: Bool { false }
+
+    var onCancel: (() -> Void)?
+
+    /// The idiomatic escape route, in case the event monitor is ever bypassed.
+    override func cancelOperation(_: Any?) {
+        onCancel?()
+    }
+}
+
+@MainActor
+final class Controller: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var panel: KeyPanel!
+    private let picker: Picker
+    private var monitor: Any?
+    private var wasKey = false
+
+    init(picker: Picker) { self.picker = picker }
+
+    func applicationDidFinishLaunching(_: Notification) {
+        picker.onConfirm = { [weak self] ids in self?.finish(with: ids) }
+        picker.onResize = { [weak self] in self?.refit() }
+        let view = NSHostingView(rootView: PanelView(picker: picker))
+        view.frame = NSRect(x: 0, y: 0, width: 640, height: 560)
+        // Let the content decide the height, within reason: a fixed frame
+        // leaves a short list floating in dead space and a long one clipped.
+        let fitted = view.fittingSize
+        let height = min(max(fitted.height, 220), 620)
+        view.frame = NSRect(x: 0, y: 0, width: 640, height: height)
+
+        panel = KeyPanel(
+            contentRect: view.frame,
+            // .nonactivatingPanel is the point: it takes keys without bringing
+            // this process to the front, so the window being slung keeps its
+            // place in the app switcher and in AeroSpace's idea of focus.
+            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = view
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .floating
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.onCancel = { [weak self] in self?.finish(with: []) }
+        panel.delegate = self
+        place(panel)
+
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handle(event) == true ? nil : event
+        }
+
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: false)
+
+        // A panel that is not key receives no keys at all, which looks like
+        // "escape does nothing" rather than like a broken window. Say so on
+        // stderr, which is discarded in normal use and visible when testing.
+        FileHandle.standardError.write(
+            Data("sling-panel: key=\(panel.isKeyWindow) active=\(NSApp.isActive)\n".utf8))
+
+        // Never become furniture. A picker nobody answered is a mistake, and
+        // an abandoned one should not need killing from a terminal.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 300) { [weak self] in
+            self?.finish(with: [])
+        }
+    }
+
+    /// Grow or shrink the window around the text, keeping the top edge put so
+    /// the list does not appear to jump when the type changes size.
+    private func refit() {
+        guard let view = panel.contentView else { return }
+        let top = panel.frame.maxY
+        let height = min(max(view.fittingSize.height, 220), 720)
+        var frame = panel.frame
+        frame.size.height = height
+        frame.origin.y = top - height
+        panel.setFrame(frame, display: true, animate: false)
+    }
+
+    /// Centred horizontally, and high — a picker belongs where the eye already
+    /// is, not in the middle of the screen. `center()` puts a tall panel low
+    /// and lands on whichever screen AppKit feels like; this follows the mouse
+    /// to the screen actually being used.
+    private func place(_ panel: NSPanel) {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+            ?? NSScreen.main
+        guard let area = screen?.visibleFrame else {
+            panel.center()
+            return
+        }
+        let size = panel.frame.size
+        let x = area.midX - size.width / 2
+        // A fifth of the way down, measured from the top.
+        let y = area.maxY - size.height - (area.height * 0.18)
+        panel.setFrameOrigin(NSPoint(x: x.rounded(), y: max(area.minY, y).rounded()))
+    }
+
+    func windowDidBecomeKey(_: Notification) {
+        wasKey = true
+    }
+
+    /// Clicking away dismisses, the way any picker should. It is also the way
+    /// out if the keyboard route ever fails: a panel with no mouse escape and
+    /// no keys is one that has to be killed from a terminal.
+    func windowDidResignKey(_: Notification) {
+        guard wasKey else { return }
+        finish(with: [])
+    }
+
+    /// Returns true when the key was ours to deal with.
+    private func handle(_ event: NSEvent) -> Bool {
+        let ctrl = event.modifierFlags.contains(.control)
+        switch event.keyCode {
+        case 53: finish(with: []); return true                       // esc
+        case 125: picker.move(1); return true                        // down
+        case 126: picker.move(-1); return true                       // up
+        case 36, 76: finish(with: picker.confirm()); return true     // return
+        case 48:                                                     // tab
+            if let other = picker.otherTab { finish(with: [other.id]) }
+            return true
+        case 49 where picker.multi: picker.toggle(); return true     // space
+        case 51:                                                     // delete
+            if !picker.query.isEmpty { picker.query.removeLast(); picker.cursor = 0 }
+            return true
+        default: break
+        }
+        if event.modifierFlags.contains(.command),
+           let c = event.charactersIgnoringModifiers {
+            switch c {
+            case "+", "=": picker.zoom(1); return true
+            case "-", "_": picker.zoom(-1); return true
+            case "0": picker.zoom(0); return true
+            default: break
+            }
+        }
+        // Pinning answers by asking again: the caller stores it and reopens,
+        // because the order of the list changes underneath.
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "p",
+           let item = picker.visible[safe: picker.cursor], item.marker == nil {
+            finish(with: ["__pin__:" + item.id])
+            return true
+        }
+        if ctrl, let c = event.charactersIgnoringModifiers?.lowercased() {
+            switch c {
+            case "n": picker.move(1); return true
+            case "p": picker.move(-1); return true
+            case "c": finish(with: []); return true
+            default: break
+            }
+        }
+        if !ctrl, !event.modifierFlags.contains(.command),
+           let typed = event.characters, typed.allSatisfy({ !$0.isNewline }), !typed.isEmpty {
+            picker.query += typed
+            picker.cursor = 0
+            return true
+        }
+        return false
+    }
+
+    private func finish(with ids: [String]) {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        for id in ids { print(id) }
+        exit(ids.isEmpty ? 1 : 0)
+    }
+}
+
+// MARK: - entry
+
+let input = FileHandle.standardInput.readDataToEndOfFile()
+guard let request = try? JSONDecoder().decode(Request.self, from: input) else {
+    FileHandle.standardError.write(Data("sling-panel: could not read the request\n".utf8))
+    exit(2)
+}
+
+/// Top-level code is nonisolated under Swift 6 strict concurrency, but it does
+/// run on the main thread, so this states what is already true rather than
+/// hopping queues.
+ink = Ink(request.theme)
+
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)   // no Dock icon, no app switcher entry
+    let controller = Controller(picker: Picker(request))
+    app.delegate = controller
+    // The delegate is the only strong reference the app holds; keep one here
+    // too so it cannot be collected while the panel is up.
+    withExtendedLifetime(controller) { app.run() }
+}

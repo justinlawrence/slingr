@@ -1,0 +1,15 @@
+# Herdr fires this when the focused tab changes, so AeroSpace can follow along
+# without anything staying resident.
+#
+# Link it with:  herdr plugin link ~/Dev/sling/plugin
+
+id = "sling"
+name = "sling"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Bring AeroSpace to the workspace matching the focused herdr tab."
+platforms = ["macos"]
+
+[[events]]
+on = "tab.focused"
+command = ["/Users/justin/Dev/sling/target/release/sling", "goto"]
