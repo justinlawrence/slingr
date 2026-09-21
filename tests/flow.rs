@@ -94,6 +94,9 @@ impl WindowManager for FakeWm {
     fn focused_monitor(&self) -> Option<String> {
         self.window.as_ref().map(|w| w.monitor.clone())
     }
+    fn focused_workspace(&self) -> Option<String> {
+        self.window.as_ref().map(|w| w.workspace.clone())
+    }
     fn all_workspaces(&self) -> Option<Vec<String>> {
         self.counts.as_ref().map(|c| c.keys().cloned().collect())
     }

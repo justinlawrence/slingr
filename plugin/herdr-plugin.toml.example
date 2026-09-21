@@ -14,3 +14,14 @@ platforms = ["macos"]
 [[events]]
 on = "tab.focused"
 command = ["SLINGR_BINARY", "goto"]
+
+# A tab is a task, so a new or renamed one has to reach AeroSpace's
+# persistent-workspaces before it can be gone to. Without these, a brand-new
+# task has no workspace until something else happens to run a sync.
+[[events]]
+on = "tab.created"
+command = ["SLINGR_BINARY", "sync"]
+
+[[events]]
+on = "tab.renamed"
+command = ["SLINGR_BINARY", "sync"]

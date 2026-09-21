@@ -242,10 +242,15 @@ The one thing a daemon did better is coalescing, so `goto` takes a lock — a
 hook spawns a process per event, and herdr has been reported to emit focus
 events in bursts.
 
-The rule that matters is when *not* to switch: only into a workspace that
-already holds windows. Switching to an empty one blanks the screen. That is
-deliberately conservative and resolves itself, since a task starts pulling as
-soon as something has been slung into it.
+A task with nothing in it yet is still somewhere to go — creating a tab and
+going there to start work is the ordinary case. Switching to one was refused at
+first, on the grounds that it blanked the screen and that getting back cost a
+full restore. Both were true of AeroSpace 0.12 and neither survived the
+upgrade: switching is a tenth of a second each way, and the windows that belong
+everywhere arrive with you, so a new task is a terminal waiting to be worked in.
+
+A tab that is created or renamed triggers a sync, so its workspace exists
+before anything tries to go there.
 
 ## Surviving a restart
 

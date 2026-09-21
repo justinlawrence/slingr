@@ -69,7 +69,7 @@ pub fn decide(
     focused_tab: Option<&str>,
     settled: Option<&str>,
     current_workspace: &str,
-    counts: &BTreeMap<String, usize>,
+    _counts: &BTreeMap<String, usize>,
 ) -> Action {
     let Some(tab) = focused_tab else {
         return Action::Hold("no focused herdr tab");
@@ -80,13 +80,13 @@ pub fn decide(
     if tab == current_workspace {
         return Action::Hold("already there");
     }
-    // The one that matters. AeroSpace shows a workspace by restoring its
-    // windows; a workspace with none is a blank screen, and getting back costs
-    // a full restore of wherever you came from.
-    match counts.get(tab) {
-        Some(n) if *n > 0 => Action::Switch(tab.to_string()),
-        _ => Action::Hold("that task holds no windows yet"),
-    }
+    // An empty task is fine to go to. This used to be refused, because on
+    // AeroSpace 0.12 showing a workspace cost about three seconds per window
+    // and the way back from a crowded one took minutes, so landing on a blank
+    // screen was expensive to undo. Both costs are now a tenth of a second,
+    // and the windows that belong everywhere arrive with you — so a new task
+    // is not a blank screen, it is a terminal waiting to be worked in.
+    Action::Switch(tab.to_string())
 }
 
 #[cfg(test)]
@@ -136,11 +136,11 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_show_an_empty_workspace() {
-        // Switching here would hide everything on screen and cost a full
-        // restore to undo.
+    fn a_task_with_nothing_in_it_yet_is_still_somewhere_to_go() {
+        // Creating a tab and going there to start work is the ordinary case.
+        // Refusing it was a defence against a cost that no longer exists.
         let action = decide(Some("t-forms"), Some("t-forms"), "infra", &counts(&[("infra", 40)]));
-        assert_eq!(action, Action::Hold("that task holds no windows yet"));
+        assert_eq!(action, Action::Switch("t-forms".into()));
     }
 
     #[test]

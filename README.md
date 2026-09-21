@@ -79,16 +79,12 @@ slingr watch              # follow along
 slingr watch --dry-run    # say what it would do, change nothing
 ```
 
-It switches only when the target workspace already holds windows. Showing an
-empty workspace blanks the screen, and getting back costs a full restore of
-wherever you came from. So a herdr tab starts pulling AeroSpace across as soon
-as you have slung something into its task, and is quietly ignored until then:
+A task with nothing in it yet is still somewhere to go: the windows that belong
+everywhere arrive with you, so a new tab lands you in a terminal rather than on
+a blank screen. Creating or renaming a tab syncs it into AeroSpace first, so
+its workspace is there before anything tries to reach it.
 
-```
-holding: that task holds no windows yet (t-pair)
-```
-
-It also waits for the tab to hold still before following it, and coalesces
+It waits for the tab to hold still before following it, and coalesces
 bursts of events, so flicking through tabs does not queue a workspace switch
 for each one passed — and a reported herdr bug that can emit ~29 phantom focus
 events a second cannot make it thrash.

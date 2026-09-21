@@ -313,7 +313,7 @@ pub fn run_many(
         return Batch::stopped(Outcome::NoWindow);
     }
 
-    let here = wm.focused_window().map(|w| w.workspace).unwrap_or_default();
+    let here = wm.focused_workspace().unwrap_or_default();
     let counts = wm.window_counts().unwrap_or_default();
 
     // Which windows, then where. The list is grouped by the workspace each
@@ -442,7 +442,7 @@ pub fn run_jump(
     pins: &[String],
 ) -> Run {
     let counts = wm.window_counts();
-    let here = wm.focused_window().map(|w| w.workspace).unwrap_or_default();
+    let here = wm.focused_workspace().unwrap_or_default();
     let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
 
     let menu = picker::build_menu(

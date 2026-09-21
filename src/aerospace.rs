@@ -39,6 +39,10 @@ pub trait WindowManager {
     fn move_window(&self, window_id: &str, workspace: &str) -> bool;
     /// The screen currently being worked on.
     fn focused_monitor(&self) -> Option<String>;
+    /// The workspace in front. Asked directly rather than derived from the
+    /// focused window, because an empty workspace has no focused window and
+    /// deriving it there yields nothing at all.
+    fn focused_workspace(&self) -> Option<String>;
     /// Every workspace AeroSpace knows about, empty ones included. With
     /// `persistent-workspaces` set this is the whole task list, which is why
     /// sling no longer keeps one of its own.
@@ -180,6 +184,11 @@ impl WindowManager for AeroSpace {
     fn all_workspaces(&self) -> Option<Vec<String>> {
         let out = self.run(&["list-workspaces", "--all"])?;
         Some(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    }
+
+    fn focused_workspace(&self) -> Option<String> {
+        let out = self.run(&["list-workspaces", "--focused"])?;
+        Some(out.lines().next()?.trim().to_string())
     }
 
     fn focused_monitor(&self) -> Option<String> {

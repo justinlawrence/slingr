@@ -241,7 +241,7 @@ fn goto_now() -> Result<()> {
     };
     let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
     let tab = slingr::herdr::focused();
-    let here = aero.focused_window().map(|w| w.workspace).unwrap_or_default();
+    let here = aero.focused_workspace().unwrap_or_default();
     let counts = aero.window_counts().unwrap_or_default();
 
     // No settling to wait for: the hook fires once per actual focus change,
@@ -265,7 +265,7 @@ fn follow_now() -> Result<()> {
 
     let aero = AeroSpace::default();
     let follow = FollowList::load();
-    let Some(here) = aero.focused_window().map(|w| w.workspace) else {
+    let Some(here) = aero.focused_workspace() else {
         say!("AeroSpace did not answer");
         return Ok(());
     };
@@ -510,7 +510,7 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
 
     let began = Instant::now();
     let focused = aero.focused_window();
-    let here = focused.as_ref().map(|w| w.workspace.clone()).unwrap_or_default();
+    let here = aero.focused_workspace().unwrap_or_default();
     let counts = aero.window_counts().unwrap_or_default();
     let read_ms = began.elapsed().as_millis();
 

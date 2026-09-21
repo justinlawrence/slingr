@@ -357,6 +357,21 @@ The one thing a daemon did better is coalescing. A hook spawns a process per
 event, and herdr has been reported to emit focus events in bursts, so `goto`
 takes a lock and a second one exits immediately rather than piling up.
 
+## An empty workspace has no focused window
+
+Obvious in hindsight, and it hid behind a guard for weeks. Asking
+`list-windows --focused` in an empty workspace returns nothing, so anything
+deriving "where am I" from the focused window gets nothing at all:
+
+```
+$ slingr follow
+AeroSpace did not answer          # wrong: it answered, there was just no window
+```
+
+Ask `list-workspaces --focused` instead. The bug was invisible while empty
+workspaces could not be reached, and appeared the moment they could — which is
+the usual shape of a guard that is doing two jobs.
+
 ## AeroSpace has no sticky windows## herdr can emit phantom focus events in bursts
 
 Reported against herdr: on an idle session with several agent panes producing
@@ -414,6 +429,21 @@ watcher that has quietly stopped looks exactly like a broken follow list.
 The one thing a daemon did better is coalescing. A hook spawns a process per
 event, and herdr has been reported to emit focus events in bursts, so `goto`
 takes a lock and a second one exits immediately rather than piling up.
+
+## An empty workspace has no focused window
+
+Obvious in hindsight, and it hid behind a guard for weeks. Asking
+`list-windows --focused` in an empty workspace returns nothing, so anything
+deriving "where am I" from the focused window gets nothing at all:
+
+```
+$ slingr follow
+AeroSpace did not answer          # wrong: it answered, there was just no window
+```
+
+Ask `list-workspaces --focused` instead. The bug was invisible while empty
+workspaces could not be reached, and appeared the moment they could — which is
+the usual shape of a guard that is doing two jobs.
 
 ## AeroSpace has no sticky windows
 
