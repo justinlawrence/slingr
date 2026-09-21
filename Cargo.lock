@@ -227,7 +227,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sling"
+name = "slingr"
 version = "0.1.0"
 dependencies = [
  "anyhow",

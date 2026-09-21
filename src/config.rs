@@ -27,7 +27,7 @@ pub struct Order {
 }
 
 pub fn config_dir() -> PathBuf {
-    home().join(".config/sling")
+    home().join(".config/slingr")
 }
 
 pub fn config_path() -> PathBuf {

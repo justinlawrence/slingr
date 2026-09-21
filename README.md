@@ -21,14 +21,14 @@ task with nothing in it yet.
 
 ```sh
 cargo build --release
-ln -sf ~/Dev/sling/target/release/sling ~/.local/bin/sling
+ln -sf ~/Dev/slingr/target/release/sling ~/.local/bin/slingr
 ```
 
 Bind it in `~/.aerospace.toml`:
 
 ```toml
-ctrl-alt-cmd-s = 'exec-and-forget /Users/justin/.local/bin/sling'
-ctrl-alt-cmd-i = 'exec-and-forget /Users/justin/.local/bin/sling jump'
+ctrl-alt-cmd-s = 'exec-and-forget /Users/justin/.local/bin/slingr'
+ctrl-alt-cmd-i = 'exec-and-forget /Users/justin/.local/bin/slingrr jump'
 ```
 
 macOS will ask once to let AeroSpace control System Events. That grant is what
@@ -38,17 +38,17 @@ draws the dialog; without it nothing appears.
 
 | | |
 |---|---|
-| `sling` | the picker |
-| `sling jump` | the picker, opened on the task list — go somewhere |
-| `sling sync` | teach AeroSpace every task, so empty ones persist |
-| `sling snapshot` | record where every window is |
-| `sling restore` | put them back after an AeroSpace restart |
-| `sling following` | windows that come along to every task |
-| `sling follow` | bring them to the workspace in front, and focus the matching herdr tab |
-| `sling goto` | go to the workspace matching herdr's focused tab, once |
-| `sling stats` | where windows actually go |
-| `sling probe` | ask AeroSpace what it sees, changing nothing |
-| `sling paths` | the files sling reads and writes |
+| `slingr` | the picker |
+| `slingr jump` | the picker, opened on the task list — go somewhere |
+| `slingr sync` | teach AeroSpace every task, so empty ones persist |
+| `slingr snapshot` | record where every window is |
+| `slingr restore` | put them back after an AeroSpace restart |
+| `slingr following` | windows that come along to every task; `--prune` forgets the dead ones |
+| `slingr follow` | bring them to the workspace in front, and focus the matching herdr tab |
+| `slingr goto` | go to the workspace matching herdr's focused tab, once |
+| `slingr stats` | where windows actually go |
+| `slingr probe` | ask AeroSpace what it sees, changing nothing |
+| `slingr paths` | the files sling reads and writes |
 
 One key, two modes. The dialog opens on the focused window, and its first line
 switches to selecting several:
@@ -71,12 +71,12 @@ support, so the mode row is a line you pick rather than a tab you click.
 
 ## Following herdr
 
-`sling watch` polls herdr's focused tab and brings AeroSpace across to the
+`slingr watch` polls herdr's focused tab and brings AeroSpace across to the
 matching workspace — the other direction of the sling.
 
 ```sh
-sling watch              # follow along
-sling watch --dry-run    # say what it would do, change nothing
+slingr watch              # follow along
+slingr watch --dry-run    # say what it would do, change nothing
 ```
 
 It switches only when the target workspace already holds windows. Showing an
@@ -108,9 +108,9 @@ on = "tab.focused"
 command = ["…/sling", "goto"]
 ```
 
-Install the herdr half with `herdr plugin link ~/Dev/sling/plugin`.
+Install the herdr half with `herdr plugin link ~/Dev/slingr/plugin`.
 
-`sling watch` still exists for somewhere the callbacks cannot be installed. It
+`slingr watch` still exists for somewhere the callbacks cannot be installed. It
 subscribes rather than polls, and `--poll` is the last resort. A daemon is the
 worse design though: one that quietly dies is indistinguishable from a broken
 follow list, which is exactly how it failed the first time.
@@ -121,8 +121,8 @@ AeroSpace does not remember which workspace a window belongs to. Restart it and
 everything lands in whatever each monitor happens to be showing — which, with
 forty-odd windows, is an evening's sorting lost.
 
-`sling snapshot` writes the mapping to `~/.local/state/sling/layout.json`, and
-`sling restore` puts it back. The watcher snapshots automatically on every
+`slingr snapshot` writes the mapping to `~/.local/state/slingr/layout.json`, and
+`slingr restore` puts it back. The watcher snapshots automatically on every
 workspace change, so there is normally a current one without thinking about it.
 
 Restore matches by window id first, then by application and title, so a window
@@ -130,7 +130,7 @@ whose application has restarted since the snapshot still finds its way home.
 Windows that no longer exist are skipped.
 
 ```sh
-sling restore --dry-run    # list what would move
+slingr restore --dry-run    # list what would move
 ```
 
 ## Windows that belong everywhere
@@ -141,7 +141,7 @@ is, and comes along to whichever task you sling something to next. Picking it
 again takes it off.
 
 AeroSpace has no sticky windows — a window is in exactly one workspace and
-nothing can change that — so this is emulation. `sling watch` subscribes to
+nothing can change that — so this is emulation. `slingr watch` subscribes to
 AeroSpace's own `focused-workspace-changed` event, so followers keep up with
 *any* workspace change: a keybinding, a click, a herdr tab, or sling itself.
 
@@ -151,8 +151,8 @@ workspace restore. On AeroSpace 0.12 the same two windows took 46 seconds; it
 is now about 100ms.
 
 Window ids do not survive an application restart, so the list goes stale when
-you quit WhatsApp. `sling following` shows what is on it; re-tagging is one
-pick.
+you quit WhatsApp. `slingr following` marks those entries `gone` and
+`--prune` forgets them; re-tagging is one pick.
 
 Draining this way is cheap. Moving a window *out* of the workspace you are
 looking at hides exactly one window; switching *into* a crowded workspace
@@ -176,7 +176,7 @@ or not answering, the list is simply shorter.
 
 ## Configuration
 
-`~/.config/sling/workspaces.toml`, seeded on first run. It holds the tasks that
+`~/.config/slingr/workspaces.toml`, seeded on first run. It holds the tasks that
 are *not* herdr tabs, the group headings, and the order they appear in.
 
 Names may only contain `[A-Za-z0-9._-]`. A `/` hangs AeroSpace, so herdr's
@@ -184,18 +184,18 @@ Names may only contain `[A-Za-z0-9._-]`. A `/` hangs AeroSpace, so herdr's
 
 ## State
 
-All under `~/.local/state/sling/`:
+All under `~/.local/state/slingr/`:
 
 | | |
 |---|---|
 | `follow.json` | windows that come along to every task |
 | `pins.json` | tasks kept at the top of their folder |
-| `layout.json` | where every window was, for `sling restore` |
+| `layout.json` | where every window was, for `slingr restore` |
 | `actions.jsonl` | one line per sling, including the ones that moved nothing |
-| `watch.jsonl` | what `sling watch` decided, with timings |
-| `seen.json` | superseded by `persistent-workspaces`; read once by `sling sync` so nothing invented before that is lost |
+| `watch.jsonl` | what `slingr watch` decided, with timings |
+| `seen.json` | superseded by `persistent-workspaces`; read once by `slingr sync` so nothing invented before that is lost |
 
-`sling paths` prints where these live, and whether the panel binary is where it
+`slingr paths` prints where these live, and whether the panel binary is where it
 is expected — a silent fallback to the AppleScript dialog usually means it is
 not.
 

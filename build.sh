@@ -3,5 +3,5 @@
 set -e
 cd "$(dirname "$0")"
 cargo build --release
-swiftc -O -o target/release/sling-panel panel/main.swift
-echo "built: target/release/sling  +  target/release/sling-panel"
+swiftc -O -o target/release/slingr-panel panel/main.swift
+echo "built: target/release/slingr  +  target/release/slingr-panel"

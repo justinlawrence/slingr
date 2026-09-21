@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Slinger: a window picker for AeroSpace, built around tasks rather than
-applications. A task is usually a herdr tab, and the windows that belong with
+slingr: a window picker for AeroSpace, built around tasks rather than
+applications. Named to match herdr, which it pairs with. A task is usually a herdr tab, and the windows that belong with
 it live in one AeroSpace workspace.
 
 **Read `docs/SPEC.md` first** — what this is for and why it is shaped as it is.
@@ -13,8 +13,8 @@ designing around a limitation.
 
 ## Names
 
-The repository, the binary and the state directory are `sling`. The panel says
-`Slinger`. Both are used; nothing depends on them matching.
+"sling" stays the verb — you sling a window, a window was slung. Only the tool
+is `slingr`.
 
 ## Build
 
@@ -23,8 +23,8 @@ The repository, the binary and the state directory are `sling`. The panel says
 cargo test      # 84 tests, none of which need AeroSpace or a screen
 ```
 
-`cargo build` alone does not build the Swift panel. If `sling-panel` is missing
-or stale, sling silently falls back to the AppleScript dialog — `sling paths`
+`cargo build` alone does not build the Swift panel. If `slingr-panel` is missing
+or stale, sling silently falls back to the AppleScript dialog — `slingr paths`
 says which it will use.
 
 ## Shape
@@ -54,12 +54,12 @@ says which it will use.
 
 - `~/.aerospace.toml` — `config-version = 2`; keybindings `ctrl-alt-cmd-s`
   (sling) and `ctrl-alt-cmd-i` (jump); `exec-on-workspace-change` runs
-  `sling follow`. The `# sling:begin` block is written by `sling sync` — do not
+  `slingr follow`. The `# slingr:begin` block is written by `slingr sync` — do not
   hand-edit it, and note that a duplicate `persistent-workspaces` key makes
   AeroSpace reject the whole file silently.
 - `plugin/herdr-plugin.toml` — linked with `herdr plugin link`, runs
-  `sling goto` on `tab.focused`.
-- `~/.config/sling/workspaces.toml` — the tasks that are not herdr tabs.
+  `slingr goto` on `tab.focused`.
+- `~/.config/slingr/workspaces.toml` — the tasks that are not herdr tabs.
 
 Nothing runs resident. Both hooks are invoked by AeroSpace and herdr
 themselves; a daemon was tried and removed, because one that quietly dies is

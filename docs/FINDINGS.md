@@ -116,7 +116,7 @@ Otherwise, empty workspaces are absent. So:
 
 - A brand-new task is unreachable from a list built only from live workspaces.
   Hence `known` in `workspaces.toml`, and the name cache in
-  `~/.local/state/sling/seen.json`.
+  `~/.local/state/slingr/seen.json`.
 - A workspace you invent and later empty out disappears from the menu unless
   something remembers it.
 - `✓` in the menu means "already holds windows", not "exists".
@@ -243,7 +243,7 @@ been re-tested, so bulk-scripting window assignment stays off the table.
 
 ## Unexplained: the first run of a freshly built binary times out
 
-`sling probe` reports `no answer within 5s` for both queries when it is the
+`slingr probe` reports `no answer within 5s` for both queries when it is the
 first thing run after `cargo build` or `cargo test` actually recompiled. Seen
 five times. Every time:
 
@@ -312,7 +312,7 @@ with no interaction produced no events at all), but the failure mode is severe
 enough to design against: one workspace switch per event is one full window
 restore per event.
 
-`sling watch` is built so that a storm cannot hurt it:
+`slingr watch` is built so that a storm cannot hurt it:
 
 - Events are read on a separate thread and coalesced. A burst collapses to a
   single action, and the watcher cannot fall behind.
@@ -349,7 +349,7 @@ command = ["…/sling", "goto"]
 `tab.focused` is accepted even though the plugin docs only ever show
 `worktree.created`. Confirmed firing.
 
-So `sling watch` is no longer the way this runs. A resident watcher was worse
+So `slingr watch` is no longer the way this runs. A resident watcher was worse
 on the merits: it died during a debugging session and stayed dead, and a
 watcher that has quietly stopped looks exactly like a broken follow list.
 
@@ -370,7 +370,7 @@ with no interaction produced no events at all), but the failure mode is severe
 enough to design against: one workspace switch per event is one full window
 restore per event.
 
-`sling watch` is built so that a storm cannot hurt it:
+`slingr watch` is built so that a storm cannot hurt it:
 
 - Events are read on a separate thread and coalesced. A burst collapses to a
   single action, and the watcher cannot fall behind.
@@ -407,7 +407,7 @@ command = ["…/sling", "goto"]
 `tab.focused` is accepted even though the plugin docs only ever show
 `worktree.created`. Confirmed firing.
 
-So `sling watch` is no longer the way this runs. A resident watcher was worse
+So `slingr watch` is no longer the way this runs. A resident watcher was worse
 on the merits: it died during a debugging session and stayed dead, and a
 watcher that has quietly stopped looks exactly like a broken follow list.
 

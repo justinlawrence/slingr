@@ -54,9 +54,9 @@ reads the focused window, offers the task list, and moves the window to
 whichever task is chosen.
 
 ```
-Slinger ◈
+slingr ◈
 [icon] Brave Browser   Inbox (578) — Arty Corner Mail
-[ sling once ] sling many  jump to           ＋ new workspace
+[ slingr once ] slingr many  jump to           ＋ new workspace
 ❯ type to filter tasks
 HERE
   ✓  ac-mail                              3 windows
@@ -85,7 +85,7 @@ when the window opens, which is why new windows are never auto-filed.
 ## Draining
 
 A workspace that has collected dozens of windows is a transitional state, not a
-load to design for. `sling many` is how you get out of it: select a batch, send
+load to design for. `slingr many` is how you get out of it: select a batch, send
 it to one task, repeat.
 
 Three tabs, and every mode offers the same strip with only the active one
@@ -165,7 +165,7 @@ structured.
 
 ## The action log
 
-Every sling appends a line to `~/.local/state/sling/actions.jsonl`, including
+Every sling appends a line to `~/.local/state/slingr/actions.jsonl`, including
 the ones that moved nothing:
 
 ```json
@@ -175,7 +175,7 @@ the ones that moved nothing:
 ```
 
 The point is to find out whether the taxonomy is right, which is not knowable
-in advance. `sling stats` summarises it. The questions it should answer:
+in advance. `slingr stats` summarises it. The questions it should answer:
 
 - Which workspaces actually get used, and which were invented and never
   revisited?
@@ -229,13 +229,13 @@ round trip rather than an oscillation.
 Nothing stays resident. Both halves are callbacks, run by something already
 running:
 
-- AeroSpace's `exec-on-workspace-change` runs `sling follow`, so windows that
+- AeroSpace's `exec-on-workspace-change` runs `slingr follow`, so windows that
   belong everywhere catch up on any workspace change, whatever caused it.
-- A herdr plugin's `tab.focused` hook runs `sling goto`.
+- A herdr plugin's `tab.focused` hook runs `slingr goto`.
 
 A resident watcher was written first and removed. It was worse on the merits:
 it died during a debugging session and stayed dead, and a watcher that has
-quietly stopped is indistinguishable from a broken follow list. `sling watch`
+quietly stopped is indistinguishable from a broken follow list. `slingr watch`
 survives for anywhere the callbacks cannot be installed.
 
 The one thing a daemon did better is coalescing, so `goto` takes a lock — a
@@ -253,7 +253,7 @@ AeroSpace does not remember which workspace a window belongs to. Restart it and
 everything lands in whatever each monitor happens to be showing — an evening's
 sorting lost, which is exactly what happened during the upgrade.
 
-`sling snapshot` writes the mapping and `sling restore` replays it, matching by
+`slingr snapshot` writes the mapping and `slingr restore` replays it, matching by
 window id first and then by application and title, so a window whose
 application has restarted still finds its way home. The snapshot is taken
 automatically on every workspace change.
@@ -262,14 +262,14 @@ automatically on every workspace change.
 
 `config-version = 2` unlocks `persistent-workspaces`, which keeps named
 workspaces alive while empty. That is what `known` and `seen.json` were for, so
-sling no longer keeps a list of its own: `sling sync` gathers every task from
+sling no longer keeps a list of its own: `slingr sync` gathers every task from
 herdr's tabs, `workspaces.toml`, AeroSpace itself and the old remembered-names
 file, and writes them into a block it owns:
 
 ```toml
-# sling:begin — managed by `sling sync`, edits here are overwritten
+# slingr:begin — managed by `slingr sync`, edits here are overwritten
 persistent-workspaces = [ … ]
-# sling:end
+# slingr:end
 ```
 
 It runs automatically whenever a task is created, so a new one exists

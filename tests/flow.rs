@@ -3,12 +3,12 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use sling::aerospace::WindowManager;
-use sling::app::{self, Outcome};
-use sling::config::{Config, Order};
-use sling::dialog::Prompt;
-use sling::app::Session;
-use sling::picker::{Row, Window, ALL, NEW, TO_MANY, TO_ONE};
+use slingr::aerospace::WindowManager;
+use slingr::app::{self, Outcome};
+use slingr::config::{Config, Order};
+use slingr::dialog::Prompt;
+use slingr::app::Session;
+use slingr::picker::{Row, Window, ALL, NEW, TO_MANY, TO_ONE};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Call {
@@ -356,7 +356,7 @@ fn sends_every_selected_window_to_one_task() {
 #[test]
 fn shows_the_id_only_where_titles_collide() {
     let wm = FakeWm::new();
-    let menu = sling::picker::build_window_menu(&wm.all, "infra", &[]);
+    let menu = slingr::picker::build_window_menu(&wm.all, "infra", &[]);
     let shown = menu.items.join("\n");
     assert!(shown.contains("The Framing Queue  [7686]"), "{shown}");
     assert!(shown.contains("The Framing Queue  [7695]"), "{shown}");
@@ -662,7 +662,7 @@ fn no_followers_means_no_extra_queries() {
 
 #[test]
 fn following_costs_no_workspace_restores() {
-    use sling::app::restores_for;
+    use slingr::app::restores_for;
     // It used to cost 1 + 2(n-1) restores, because moving a window dragged the
     // view along and stranded the rest. Naming the window costs none.
     for n in 0..5 {
@@ -672,7 +672,7 @@ fn following_costs_no_workspace_restores() {
 
 #[test]
 fn a_layout_matches_by_id_then_by_app_and_title() {
-    use sling::store::{Layout, Placed};
+    use slingr::store::{Layout, Placed};
 
     let saved = Layout {
         at: "2026-09-20T00:00:00Z".into(),
@@ -704,12 +704,12 @@ fn a_window_that_follows_is_marked_in_the_list() {
     // where it becomes visible.
     let wm = FakeWm::new();
     let following = vec!["9339".to_string(), "13029".to_string()];
-    let menu = sling::picker::build_window_menu(&wm.all, "infra", &following);
+    let menu = slingr::picker::build_window_menu(&wm.all, "infra", &following);
 
     assert!(menu.rows.iter().all(|r| !r.pinned), "no follower is in this fixture yet");
 
     let with_one = vec!["7695".to_string()];
-    let menu = sling::picker::build_window_menu(&wm.all, "infra", &with_one);
+    let menu = slingr::picker::build_window_menu(&wm.all, "infra", &with_one);
     let marked: Vec<&str> = menu.rows.iter().filter(|r| r.pinned).map(|r| r.id.as_str()).collect();
     assert_eq!(marked, vec!["7695"]);
 }
@@ -849,5 +849,5 @@ fn a_key_can_open_straight_onto_the_jump_tab() {
         .filter(|r| r.marker.as_deref() == Some("tab") && r.active)
         .map(|r| r.id.clone())
         .collect();
-    assert_eq!(active, vec![sling::picker::TO_JUMP.to_string()]);
+    assert_eq!(active, vec![slingr::picker::TO_JUMP.to_string()]);
 }

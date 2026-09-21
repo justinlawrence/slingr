@@ -33,7 +33,7 @@ pub fn binary() -> std::path::PathBuf {
         .into_iter()
         .flatten()
         .filter_map(|p| p.parent())
-        .map(|dir| dir.join("sling-panel"));
+        .map(|dir| dir.join("slingr-panel"));
 
     let mut first = None;
     for candidate in candidates {
@@ -42,7 +42,7 @@ pub fn binary() -> std::path::PathBuf {
         }
         first.get_or_insert(candidate);
     }
-    first.unwrap_or_else(|| "sling-panel".into())
+    first.unwrap_or_else(|| "slingr-panel".into())
 }
 
 pub fn available() -> bool {

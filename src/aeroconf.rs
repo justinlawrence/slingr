@@ -16,8 +16,8 @@ use anyhow::{Context, Result};
 
 use crate::config::home;
 
-pub const BEGIN: &str = "# sling:begin — managed by `sling sync`, edits here are overwritten";
-pub const END: &str = "# sling:end";
+pub const BEGIN: &str = "# slingr:begin — managed by `slingr sync`, edits here are overwritten";
+pub const END: &str = "# slingr:end";
 
 pub fn path() -> PathBuf {
     home().join(".aerospace.toml")

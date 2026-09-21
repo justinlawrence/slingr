@@ -8,16 +8,16 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use sling::aerospace::{self, AeroSpace};
-use sling::app::{self, Batch, Outcome, Run, Session};
-use sling::picker::Window;
-use sling::config::{self, Config};
-use sling::dialog::{Prompt, SystemEvents};
-use sling::panel::Panel;
-use sling::store::{self, ActionLog, FollowList, Layout, NameCache, Pins, Placed};
+use slingr::aerospace::{self, AeroSpace};
+use slingr::app::{self, Batch, Outcome, Run, Session};
+use slingr::picker::Window;
+use slingr::config::{self, Config};
+use slingr::dialog::{Prompt, SystemEvents};
+use slingr::panel::Panel;
+use slingr::store::{self, ActionLog, FollowList, Layout, NameCache, Pins, Placed};
 
 #[derive(Parser)]
-#[command(name = "sling", about = "Throw a window at a task.", version)]
+#[command(name = "slingr", about = "Throw a window at a task.", version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -29,7 +29,11 @@ enum Cmd {
     /// this automatically on every workspace change.
     Follow,
     /// List the windows that come along to every task.
-    Following,
+    Following {
+        /// Forget the ones whose window no longer exists.
+        #[arg(long)]
+        prune: bool,
+    },
     /// Open the picker on the task list, to go to one rather than send a
     /// window to one.
     Jump,
@@ -102,12 +106,12 @@ fn main() -> Result<()> {
         Some(Cmd::Jump) => sling_in(app::Mode::Jump),
         Some(Cmd::Goto) => goto_now(),
         Some(Cmd::Follow) => follow_now(),
-        Some(Cmd::Following) => list_following(),
+        Some(Cmd::Following { prune }) => list_following(prune),
         Some(Cmd::Stats { recent }) => stats(recent),
         Some(Cmd::Probe) => probe(),
         Some(Cmd::Paths) => {
-            say!("panel   {}{}", sling::panel::binary().display(),
-                 if sling::panel::available() { "" } else { "   (missing — falls back to the dialog)" });
+            say!("panel   {}{}", slingr::panel::binary().display(),
+                 if slingr::panel::available() { "" } else { "   (missing — falls back to the dialog)" });
             say!("config  {}", config::config_path().display());
             say!("state   {}", store::state_dir().display());
             say!("log     {}", ActionLog::default().path().display());
@@ -147,7 +151,7 @@ fn sling_in(start: app::Mode) -> Result<()> {
     let mut cfg = Config::load()?;
     // A task is usually a herdr tab, so the tabs are offered whether or not
     // anyone has written them into the config.
-    for task in sling::herdr::tasks() {
+    for task in slingr::herdr::tasks() {
         if !cfg.known.contains(&task) {
             cfg.known.push(task);
         }
@@ -157,7 +161,7 @@ fn sling_in(start: app::Mode) -> Result<()> {
     let mut pins = Pins::load();
     // The panel when it is there, the AppleScript dialog when it is not, so a
     // missing build degrades to something that still works.
-    let prompt: Box<dyn Prompt> = if sling::panel::available() {
+    let prompt: Box<dyn Prompt> = if slingr::panel::available() {
         Box::new(Panel)
     } else {
         Box::new(SystemEvents)
@@ -229,14 +233,14 @@ extern "C" {
 }
 
 fn goto_now() -> Result<()> {
-    use sling::aerospace::WindowManager;
-    use sling::watch::{decide, Action};
+    use slingr::aerospace::WindowManager;
+    use slingr::watch::{decide, Action};
 
     let Some(_held) = only_one("goto") else {
         return Ok(());
     };
     let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
-    let tab = sling::herdr::focused();
+    let tab = slingr::herdr::focused();
     let here = aero.focused_window().map(|w| w.workspace).unwrap_or_default();
     let counts = aero.window_counts().unwrap_or_default();
 
@@ -257,7 +261,7 @@ fn goto_now() -> Result<()> {
 }
 
 fn follow_now() -> Result<()> {
-    use sling::aerospace::WindowManager;
+    use slingr::aerospace::WindowManager;
 
     let aero = AeroSpace::default();
     let follow = FollowList::load();
@@ -280,8 +284,8 @@ fn follow_now() -> Result<()> {
     // This cannot chase its own tail: focusing a tab that is already focused
     // is skipped, and were it not, the return trip finds the workspace already
     // correct and stops there.
-    if let Some(tab) = sling::herdr::tab_named(&here) {
-        if !tab.focused && sling::herdr::focus_tab(&tab.id) {
+    if let Some(tab) = slingr::herdr::tab_named(&here) {
+        if !tab.focused && slingr::herdr::focus_tab(&tab.id) {
             say!("herdr -> {here}");
         }
     }
@@ -290,14 +294,44 @@ fn follow_now() -> Result<()> {
     Ok(())
 }
 
-fn list_following() -> Result<()> {
-    let follow = FollowList::load();
+fn list_following(prune: bool) -> Result<()> {
+    use slingr::aerospace::WindowManager;
+
+    let mut follow = FollowList::load();
     if follow.windows.is_empty() {
-        say!("nothing follows you yet — pick \"all workspaces\" in the sling dialog");
+        say!("nothing follows you yet — pick \"all workspaces\" in the picker");
         return Ok(());
     }
+
+    // Window ids do not survive the application restarting, so an entry can
+    // outlive the window it named. Such an entry is skipped anyway, but a list
+    // that does not say so is worse than no list.
+    let live: Vec<String> = AeroSpace::default()
+        .all_windows()
+        .map(|all| all.into_iter().map(|w| w.id).collect())
+        .unwrap_or_default();
+
+    let mut stale = 0;
     for w in &follow.windows {
-        say!("  [{}] {} — {}", w.id, w.app, w.title);
+        let gone = !live.is_empty() && !live.contains(&w.id);
+        if gone {
+            stale += 1;
+        }
+        say!(
+            "  {} [{}] {} — {}",
+            if gone { "gone" } else { "    " },
+            w.id,
+            w.app,
+            w.title
+        );
+    }
+
+    if stale > 0 && prune {
+        follow.windows.retain(|w| live.contains(&w.id));
+        follow.save()?;
+        say!("\nforgot {stale} whose window no longer exists");
+    } else if stale > 0 {
+        say!("\n{stale} point at windows that are gone — `slingr following --prune` forgets them");
     }
     Ok(())
 }
@@ -371,11 +405,11 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
         return watch_by_polling(&aero, dry_run, Duration::from_millis(interval_ms.max(100)));
     }
 
-    let stream = match sling::herdr::subscribe(&["tab.focused"]) {
+    let stream = match slingr::herdr::subscribe(&["tab.focused"]) {
         Ok(s) => s,
         Err(why) => {
-            say!("could not subscribe at {}: {why}", sling::herdr::socket_path().display());
-            say!("try: sling watch --poll");
+            say!("could not subscribe at {}: {why}", slingr::herdr::socket_path().display());
+            say!("try: slingr watch --poll");
             return Ok(());
         }
     };
@@ -391,7 +425,7 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
     thread::spawn(move || {
         for line in BufReader::new(stream).lines() {
             let Ok(line) = line else { break };
-            if sling::watch::is_tab_focused(&line) && tx.send(()).is_err() {
+            if slingr::watch::is_tab_focused(&line) && tx.send(()).is_err() {
                 break;
             }
         }
@@ -403,7 +437,7 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
     // itself: bringing followers raises no further event.
     if !dry_run {
         thread::spawn(move || {
-            let Ok(child) = std::process::Command::new(sling::aerospace::BIN)
+            let Ok(child) = std::process::Command::new(slingr::aerospace::BIN)
                 .args(["subscribe", "focused-workspace-changed", "--no-send-initial"])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
@@ -412,12 +446,12 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
                 return;
             };
             let Some(out) = child.stdout else { return };
-            use sling::aerospace::WindowManager;
+            use slingr::aerospace::WindowManager;
             let aero = AeroSpace::default();
             let mut last = String::new();
             for line in BufReader::new(out).lines() {
                 let Ok(line) = line else { break };
-                let Some(workspace) = sling::watch::workspace_changed(&line) else {
+                let Some(workspace) = slingr::watch::workspace_changed(&line) else {
                     continue;
                 };
                 if workspace == last {
@@ -438,10 +472,10 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
         while rx.try_recv().is_ok() {}
         // The event carries tab_id, not the label, and a rename would make a
         // cached mapping wrong. Asking costs about 7ms and is always right.
-        let before = sling::herdr::focused();
+        let before = slingr::herdr::focused();
         thread::sleep(settle);
         while rx.try_recv().is_ok() {}
-        act_on(&aero, sling::herdr::focused(), before, dry_run);
+        act_on(&aero, slingr::herdr::focused(), before, dry_run);
     }
     say!("herdr closed the connection");
     Ok(())
@@ -455,7 +489,7 @@ fn watch_by_polling(aero: &AeroSpace, dry_run: bool, wait: Duration) -> Result<(
     );
     let mut settled: Option<String> = None;
     loop {
-        let tab = sling::herdr::focused();
+        let tab = slingr::herdr::focused();
         act_on(aero, tab.clone(), settled, dry_run);
         settled = tab;
         thread::sleep(wait);
@@ -471,8 +505,8 @@ fn watch_by_polling(aero: &AeroSpace, dry_run: bool, wait: Duration) -> Result<(
 /// field is the one worth having: a switch that is immediately undone looks
 /// identical from outside to a switch that never happened.
 fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_run: bool) {
-    use sling::aerospace::WindowManager;
-    use sling::watch::{decide, Action};
+    use slingr::aerospace::WindowManager;
+    use slingr::watch::{decide, Action};
 
     let began = Instant::now();
     let focused = aero.focused_window();
@@ -522,7 +556,7 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
                         brought.len(),
                         app::restores_for(brought.len())
                     );
-                    say!("     each follower past the first costs two more — `sling following`");
+                    say!("     each follower past the first costs two more — `slingr following`");
                 }
 
                 let t1 = Instant::now();
@@ -571,7 +605,7 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
 /// This is what lets a brand-new task be switched to, appear in AeroSpace's
 /// menu bar, and be offered by name — without sling keeping a list of its own.
 fn sync_workspaces(loud: bool) -> Result<()> {
-    use sling::aerospace::WindowManager;
+    use slingr::aerospace::WindowManager;
 
     let cfg = Config::load()?;
     let aero = AeroSpace::default();
@@ -584,7 +618,7 @@ fn sync_workspaces(loud: bool) -> Result<()> {
             }
         }
     };
-    add(sling::herdr::tasks());
+    add(slingr::herdr::tasks());
     add(cfg.known.clone());
     add(aero.all_workspaces().unwrap_or_default());
     // Whatever the old remembered-names file still holds, so nothing that was
@@ -592,15 +626,15 @@ fn sync_workspaces(loud: bool) -> Result<()> {
     add(store::NameCache::load().workspaces);
     names.sort();
 
-    let text = std::fs::read_to_string(sling::aeroconf::path()).unwrap_or_default();
-    if !sling::aeroconf::declares_version_2(&text) {
+    let text = std::fs::read_to_string(slingr::aeroconf::path()).unwrap_or_default();
+    if !slingr::aeroconf::declares_version_2(&text) {
         say!("~/.aerospace.toml needs `config-version = 2` before persistent-workspaces works");
         return Ok(());
     }
 
-    let changed = sling::aeroconf::sync(&names)?;
+    let changed = slingr::aeroconf::sync(&names)?;
     if changed {
-        let _ = std::process::Command::new(sling::aerospace::BIN)
+        let _ = std::process::Command::new(slingr::aerospace::BIN)
             .arg("reload-config")
             .status();
     }
@@ -616,7 +650,7 @@ fn sync_workspaces(loud: bool) -> Result<()> {
 
 /// Write down where everything is. Cheap enough to do after every change.
 fn snapshot() -> Result<usize> {
-    use sling::aerospace::WindowManager;
+    use slingr::aerospace::WindowManager;
 
     let Some(windows) = AeroSpace::default().all_windows() else {
         return Ok(0);
@@ -634,11 +668,11 @@ fn snapshot() -> Result<usize> {
 }
 
 fn restore(dry_run: bool) -> Result<()> {
-    use sling::aerospace::WindowManager;
+    use slingr::aerospace::WindowManager;
 
     let layout = Layout::load();
     if layout.windows.is_empty() {
-        say!("no snapshot yet — run `sling snapshot`");
+        say!("no snapshot yet — run `slingr snapshot`");
         return Ok(());
     }
     let aero = AeroSpace::default();
@@ -680,7 +714,7 @@ fn restore(dry_run: bool) -> Result<()> {
 
 /// Read-only: the two queries a sling starts with, and nothing else.
 fn probe() -> Result<()> {
-    use sling::aerospace::WindowManager;
+    use slingr::aerospace::WindowManager;
 
     let aero = AeroSpace::default();
     match aero.try_run(&["list-windows", "--focused", "--format", aerospace::FORMAT]) {
@@ -697,7 +731,7 @@ fn probe() -> Result<()> {
         None => say!("occupied FAILED"),
     }
     let cache = NameCache::load();
-    say!("herdr    {}", sling::herdr::tasks().join(", "));
+    say!("herdr    {}", slingr::herdr::tasks().join(", "));
     say!("known    {}", Config::load()?.known.join(", "));
     say!("seen     {}", cache.workspaces.join(", "));
     Ok(())

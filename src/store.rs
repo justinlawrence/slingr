@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::home;
 
 pub fn state_dir() -> PathBuf {
-    home().join(".local/state/sling")
+    home().join(".local/state/slingr")
 }
 
 /// Every workspace name ever seen or created.

@@ -1,4 +1,4 @@
-// sling-panel — the picker, as a floating panel.
+// slingr-panel — the picker, as a floating panel.
 //
 // Presentation only. Every decision belongs to the Rust side: this reads a
 // list on stdin, shows it, and prints what was chosen. That keeps the logic
@@ -304,7 +304,7 @@ struct PanelView: View {
     private var header: some View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
-                Text("Slinger").font(type.title).tracking(5).foregroundStyle(ink.text)
+                Text("slingr").font(type.title).tracking(5).foregroundStyle(ink.text)
                 Text("◈").font(type.rowName).foregroundStyle(ink.accent)
                 Spacer()
             }
@@ -611,7 +611,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // "escape does nothing" rather than like a broken window. Say so on
         // stderr, which is discarded in normal use and visible when testing.
         FileHandle.standardError.write(
-            Data("sling-panel: key=\(panel.isKeyWindow) active=\(NSApp.isActive)\n".utf8))
+            Data("slingr-panel: key=\(panel.isKeyWindow) active=\(NSApp.isActive)\n".utf8))
 
         // Never become furniture. A picker nobody answered is a mistake, and
         // an abandoned one should not need killing from a terminal.
@@ -725,7 +725,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard let request = try? JSONDecoder().decode(Request.self, from: input) else {
-    FileHandle.standardError.write(Data("sling-panel: could not read the request\n".utf8))
+    FileHandle.standardError.write(Data("slingr-panel: could not read the request\n".utf8))
     exit(2)
 }
 

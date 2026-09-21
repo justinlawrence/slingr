@@ -8,7 +8,7 @@
 # task is unreachable until something is already in it. Listing it here offers
 # it in the sling dialog anyway, unmarked until it has windows. Anything you
 # create through "new workspace…" is remembered in
-# ~/.local/state/sling/seen.json and needs no entry here either.
+# ~/.local/state/slingr/seen.json and needs no entry here either.
 #
 # Names may only contain [A-Za-z0-9._-]. A "/" hangs AeroSpace on a modal
 # dialog, so herdr's "t/forms" becomes "t-forms" here. See docs/FINDINGS.md.
