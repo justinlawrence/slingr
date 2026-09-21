@@ -1,0 +1,66 @@
+# CLAUDE.md
+
+Slinger: a window picker for AeroSpace, built around tasks rather than
+applications. A task is usually a herdr tab, and the windows that belong with
+it live in one AeroSpace workspace.
+
+**Read `docs/SPEC.md` first** — what this is for and why it is shaped as it is.
+**Read `docs/FINDINGS.md` before changing anything that touches AeroSpace or
+herdr.** It records behaviour that is in neither project's documentation, found
+by breaking things. Most of it cost an evening. The single biggest lesson is at
+the top: check the installed version against the latest release before
+designing around a limitation.
+
+## Names
+
+The repository, the binary and the state directory are `sling`. The panel says
+`Slinger`. Both are used; nothing depends on them matching.
+
+## Build
+
+```sh
+./build.sh      # cargo build --release AND swiftc the panel
+cargo test      # 84 tests, none of which need AeroSpace or a screen
+```
+
+`cargo build` alone does not build the Swift panel. If `sling-panel` is missing
+or stale, sling silently falls back to the AppleScript dialog — `sling paths`
+says which it will use.
+
+## Shape
+
+- `src/picker.rs` — the rules, with no I/O: parsing, naming, grouping, menu
+  building. Tested directly.
+- `src/app.rs` — the flows, written against the `WindowManager` and `Prompt`
+  traits so they can be driven with no window manager and no screen.
+- `src/aerospace.rs`, `src/herdr.rs`, `src/dialog.rs`, `src/panel.rs` — the
+  impure edges. Each is thin on purpose.
+- `panel/main.swift` — presentation only. Reads rows as JSON on stdin, prints
+  chosen ids. All the thinking stays in Rust.
+- `tests/flow.rs` — whole flows against fakes. If a change is about *ordering*
+  (what is called before what), assert it here; that is where the worst bug in
+  this project lived.
+
+## Conventions
+
+- UK English in names and comments.
+- Conventional Commits.
+- Comments explain *why*, especially where the code looks odd — it is usually
+  working around something in `docs/FINDINGS.md`. Do not remove one without
+  reading that file.
+- Every non-obvious constraint should be a test, not a comment alone.
+
+## Live configuration this depends on
+
+- `~/.aerospace.toml` — `config-version = 2`; keybindings `ctrl-alt-cmd-s`
+  (sling) and `ctrl-alt-cmd-i` (jump); `exec-on-workspace-change` runs
+  `sling follow`. The `# sling:begin` block is written by `sling sync` — do not
+  hand-edit it, and note that a duplicate `persistent-workspaces` key makes
+  AeroSpace reject the whole file silently.
+- `plugin/herdr-plugin.toml` — linked with `herdr plugin link`, runs
+  `sling goto` on `tab.focused`.
+- `~/.config/sling/workspaces.toml` — the tasks that are not herdr tabs.
+
+Nothing runs resident. Both hooks are invoked by AeroSpace and herdr
+themselves; a daemon was tried and removed, because one that quietly dies is
+indistinguishable from a broken follow list.

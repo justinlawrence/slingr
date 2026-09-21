@@ -44,7 +44,8 @@ draws the dialog; without it nothing appears.
 | `sling snapshot` | record where every window is |
 | `sling restore` | put them back after an AeroSpace restart |
 | `sling following` | windows that come along to every task |
-| `sling follow` | bring them to the workspace in front, now |
+| `sling follow` | bring them to the workspace in front, and focus the matching herdr tab |
+| `sling goto` | go to the workspace matching herdr's focused tab, once |
 | `sling stats` | where windows actually go |
 | `sling probe` | ask AeroSpace what it sees, changing nothing |
 | `sling paths` | the files sling reads and writes |
@@ -183,10 +184,20 @@ Names may only contain `[A-Za-z0-9._-]`. A `/` hangs AeroSpace, so herdr's
 
 ## State
 
-- `~/.local/state/sling/seen.json` — every workspace name ever seen, so a task
-  survives its workspace emptying out
-- `~/.local/state/sling/actions.jsonl` — one line per sling, including the ones
-  that moved nothing
+All under `~/.local/state/sling/`:
+
+| | |
+|---|---|
+| `follow.json` | windows that come along to every task |
+| `pins.json` | tasks kept at the top of their folder |
+| `layout.json` | where every window was, for `sling restore` |
+| `actions.jsonl` | one line per sling, including the ones that moved nothing |
+| `watch.jsonl` | what `sling watch` decided, with timings |
+| `seen.json` | superseded by `persistent-workspaces`; read once by `sling sync` so nothing invented before that is lost |
+
+`sling paths` prints where these live, and whether the panel binary is where it
+is expected — a silent fallback to the AppleScript dialog usually means it is
+not.
 
 ## Documentation
 
