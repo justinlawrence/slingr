@@ -12,4 +12,4 @@ platforms = ["macos"]
 
 [[events]]
 on = "tab.focused"
-command = ["/Users/justin/Dev/slingr/target/release/sling", "goto"]
+command = ["/Users/justin/Dev/slingr/target/release/slingr", "goto"]

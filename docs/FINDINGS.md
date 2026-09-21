@@ -343,7 +343,7 @@ by name if missing, which is at least a legible way to find out:
 ```toml
 [[events]]
 on = "tab.focused"
-command = ["…/sling", "goto"]
+command = ["…/slingr", "goto"]
 ```
 
 `tab.focused` is accepted even though the plugin docs only ever show
@@ -401,7 +401,7 @@ by name if missing, which is at least a legible way to find out:
 ```toml
 [[events]]
 on = "tab.focused"
-command = ["…/sling", "goto"]
+command = ["…/slingr", "goto"]
 ```
 
 `tab.focused` is accepted even though the plugin docs only ever show

@@ -28,7 +28,7 @@ Bind it in `~/.aerospace.toml`:
 
 ```toml
 ctrl-alt-cmd-s = 'exec-and-forget /Users/justin/.local/bin/slingr'
-ctrl-alt-cmd-i = 'exec-and-forget /Users/justin/.local/bin/slingrr jump'
+ctrl-alt-cmd-i = 'exec-and-forget /Users/justin/.local/bin/slingr jump'
 ```
 
 macOS will ask once to let AeroSpace control System Events. That grant is what
@@ -98,14 +98,14 @@ Nothing stays resident. Both halves are callbacks:
 ```toml
 # ~/.aerospace.toml — windows that belong everywhere catch up on any
 # workspace change, whatever caused it
-exec-on-workspace-change = ['…/sling', 'follow']
+exec-on-workspace-change = ['…/slingr', 'follow']
 ```
 
 ```toml
 # plugin/herdr-plugin.toml — herdr runs this when the focused tab changes
 [[events]]
 on = "tab.focused"
-command = ["…/sling", "goto"]
+command = ["…/slingr", "goto"]
 ```
 
 Install the herdr half with `herdr plugin link ~/Dev/slingr/plugin`.
