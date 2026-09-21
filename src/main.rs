@@ -30,6 +30,9 @@ enum Cmd {
     Follow,
     /// List the windows that come along to every task.
     Following,
+    /// Open the picker on the task list, to go to one rather than send a
+    /// window to one.
+    Jump,
     /// Go to the workspace matching herdr's focused tab, once.
     ///
     /// Made for herdr's `tab.focused` plugin hook. Does the same as a single
@@ -96,6 +99,7 @@ fn main() -> Result<()> {
         Some(Cmd::Sync) => sync_workspaces(true),
         Some(Cmd::Snapshot) => { snapshot()?; Ok(()) }
         Some(Cmd::Restore { dry_run }) => restore(dry_run),
+        Some(Cmd::Jump) => sling_in(app::Mode::Jump),
         Some(Cmd::Goto) => goto_now(),
         Some(Cmd::Follow) => follow_now(),
         Some(Cmd::Following) => list_following(),
@@ -136,6 +140,10 @@ fn log_entry(outcome: &Outcome, window: Option<&Window>) -> serde_json::Value {
 }
 
 fn sling() -> Result<()> {
+    sling_in(app::Mode::One)
+}
+
+fn sling_in(start: app::Mode) -> Result<()> {
     let mut cfg = Config::load()?;
     // A task is usually a herdr tab, so the tabs are offered whether or not
     // anyone has written them into the config.
@@ -159,7 +167,8 @@ fn sling() -> Result<()> {
     // Bounded for the same reason the mode switch is: a prompt that only ever
     // pins must not spin.
     for _ in 0..24 {
-        let session = app::run_session(
+        let session = app::run_session_from(
+            start,
             &AeroSpace::default(),
             prompt.as_ref(),
             &cfg,

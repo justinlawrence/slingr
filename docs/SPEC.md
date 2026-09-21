@@ -56,7 +56,7 @@ whichever task is chosen.
 ```
 Slinger ◈
 [icon] Brave Browser   Inbox (578) — Arty Corner Mail
-[ sling once ] sling many                    ＋ new workspace
+[ sling once ] sling many  jump to           ＋ new workspace
 ❯ type to filter tasks
 HERE
   ✓  ac-mail                              3 windows
@@ -88,10 +88,10 @@ A workspace that has collected dozens of windows is a transitional state, not a
 load to design for. `sling many` is how you get out of it: select a batch, send
 it to one task, repeat.
 
-Two modes, two tabs, one key. The fast path stays a single question about the
-focused window; the batch path is one tab away. Both tabs are always shown and
-only which is active changes — a row that means "switch" was tried first and
-was never honest about being a mode.
+Three tabs, and every mode offers the same strip with only the active one
+changing — a row that means "switch" was tried first and was never honest about
+being a mode. The fast path stays a single question about the focused window;
+the others are one tab away, or their own key.
 
 The window list covers every workspace, grouped by the one each window is in,
 and a whole group can be taken at once: the heading carries none/some/all. So
@@ -104,6 +104,23 @@ a title, and where one does collide the window id is shown beside it.
 
 Every step after a mode's front door carries no tabs. Switching mode halfway
 through answering "which windows" is not something anyone means to do.
+
+## Jumping
+
+The third tab answers the other question you can ask of a task list: not
+"where does this window go" but "take me there". `ctrl-alt-cmd-i` — the key
+above the one that slings — opens straight onto it.
+
+Nothing is slung, so there is no subject and no window is touched. Everything
+that ought to follow from arriving happens by itself, because those hang off
+the workspace changing rather than off sling: the windows that belong
+everywhere catch up, and herdr focuses the matching tab. One key gets you the
+task, its windows and its agent.
+
+Empty tasks are listed and can be jumped to — going somewhere to start work is
+exactly when a task is empty. That is different from the automatic
+herdr-driven switch, which still refuses an empty workspace, because nobody
+asked for that one.
 
 ## Two screens
 

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use crate::aerospace::WindowManager;
 use crate::config::Config;
 use crate::dialog::Prompt;
-use crate::picker::{self, Window, ALL, NEW, TO_MANY, TO_ONE};
+use crate::picker::{self, Window, ALL, NEW, TO_JUMP, TO_MANY, TO_ONE};
 
 /// The application that owns sling's own dialog; never a task window.
 const DIALOG_APP: &str = "System Events";
@@ -25,9 +25,10 @@ pub enum Outcome {
     Cancelled,
     /// A group heading was selected; headings name no workspace.
     Heading,
-    /// The mode row was picked. Never reaches the log — `run_session` acts on
-    /// it and reopens the dialog in the other mode.
-    SwitchMode,
+    /// A tab was picked. Never reaches the log — `run_session` acts on it and
+    /// reopens in that mode. Carries which, because with three tabs there is
+    /// no "the other one".
+    SwitchMode { to: String },
     /// A row was pinned or unpinned. The caller stores it and asks again,
     /// since the order of the list has changed underneath.
     PinToggled { workspace: String },
@@ -43,6 +44,8 @@ pub enum Outcome {
     Following,
     /// Taken off it.
     Unfollowing,
+    /// Went to a task rather than sending anything to one.
+    Jumped { to: String },
 }
 
 impl Outcome {
@@ -52,7 +55,7 @@ impl Outcome {
             Outcome::OwnDialog => "own_dialog",
             Outcome::Cancelled => "cancelled",
             Outcome::Heading => "heading",
-            Outcome::SwitchMode => "switch_mode",
+            Outcome::SwitchMode { .. } => "switch_mode",
             Outcome::PinToggled { .. } => "pin_toggled",
             Outcome::SameWorkspace => "same_workspace",
             Outcome::EmptyName { .. } => "empty_name",
@@ -61,6 +64,7 @@ impl Outcome {
             Outcome::Moved { .. } => "moved",
             Outcome::Following => "following",
             Outcome::Unfollowing => "unfollowing",
+            Outcome::Jumped { .. } => "jumped",
         }
     }
 }
@@ -169,10 +173,9 @@ pub fn run(
         pins,
     );
 
-    let mut rows = menu.rows.clone();
-    rows.insert(0, picker::Row::tab(TO_ONE, picker::ONCE_LABEL, true));
-    rows.insert(1, picker::Row::tab(TO_MANY, picker::MANY_LABEL, false));
-    rows.insert(2, picker::Row::subject(&window.app, &window.title, &window.bundle));
+    let mut rows = tabs(Mode::One);
+    rows.push(picker::Row::subject(&window.app, &window.title, &window.bundle));
+    rows.extend(menu.rows.clone());
     // Sits with the current workspace, because both answer the same question:
     // where this window lives. An ordinary row, so it can carry a tick.
     let showing_everywhere = follow.contains(&window.id);
@@ -214,8 +217,8 @@ pub fn run(
     let Some(choice) = prompt.choose_rows(&rows, "Sling window", &heading) else {
         return done(Outcome::Cancelled);
     };
-    if choice == TO_MANY {
-        return done(Outcome::SwitchMode);
+    if choice == TO_MANY || choice == TO_JUMP {
+        return done(Outcome::SwitchMode { to: choice });
     }
     if choice == TO_ONE {
         // Already here; nothing to switch to.
@@ -318,9 +321,8 @@ pub fn run_many(
     // are here, in the answer, rather than as a question of their own.
     let from = windows.clone();
     let menu = picker::build_window_menu(&from, &here, follow);
-    let mut rows = menu.rows.clone();
-    rows.insert(0, picker::Row::tab(TO_ONE, picker::ONCE_LABEL, false));
-    rows.insert(1, picker::Row::tab(TO_MANY, picker::MANY_LABEL, true));
+    let mut rows = tabs(Mode::Many);
+    rows.extend(menu.rows.clone());
 
     let Some(picked) = prompt.choose_many_rows(
         &rows,
@@ -329,11 +331,11 @@ pub fn run_many(
     ) else {
         return Batch::stopped(Outcome::Cancelled);
     };
-    if picked.iter().any(|p| p == TO_ONE) {
-        return Batch::stopped(Outcome::SwitchMode);
+    if let Some(tab) = picked.iter().find(|p| *p == TO_ONE || *p == TO_JUMP) {
+        return Batch::stopped(Outcome::SwitchMode { to: tab.clone() });
     }
-    if picked.iter().any(|p| p == TO_ONE) {
-        return Batch::stopped(Outcome::SwitchMode);
+    if let Some(tab) = picked.iter().find(|p| *p == TO_ONE || *p == TO_JUMP) {
+        return Batch::stopped(Outcome::SwitchMode { to: tab.clone() });
     }
     let chosen: Vec<Window> =
         from.iter().filter(|w| picked.contains(&w.id)).cloned().collect();
@@ -413,6 +415,69 @@ pub fn run_many(
 pub enum Mode {
     One,
     Many,
+    Jump,
+}
+
+/// The three tabs, with the showing one marked. Built in one place so every
+/// mode offers the same strip and cannot drift.
+pub fn tabs(showing: Mode) -> Vec<picker::Row> {
+    vec![
+        picker::Row::tab(TO_ONE, picker::ONCE_LABEL, showing == Mode::One),
+        picker::Row::tab(TO_MANY, picker::MANY_LABEL, showing == Mode::Many),
+        picker::Row::tab(TO_JUMP, picker::JUMP_LABEL, showing == Mode::Jump),
+    ]
+}
+
+/// Go to a task rather than sending a window to one.
+///
+/// Nothing is slung, so there is no subject and no window to speak of. What
+/// follows from arriving — the windows that belong everywhere catching up, and
+/// herdr focusing the matching tab — happens by itself, because those hang off
+/// the workspace changing rather than off sling.
+pub fn run_jump(
+    wm: &dyn WindowManager,
+    prompt: &dyn Prompt,
+    cfg: &Config,
+    cached: &[String],
+    pins: &[String],
+) -> Run {
+    let counts = wm.window_counts();
+    let here = wm.focused_window().map(|w| w.workspace).unwrap_or_default();
+    let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
+
+    let menu = picker::build_menu(
+        counts.as_ref(),
+        &cfg.known,
+        &[cached, &known_to_aerospace].concat(),
+        &here,
+        &cfg.order.prefixes,
+        &cfg.labels,
+        pins,
+    );
+    let mut rows = tabs(Mode::Jump);
+    rows.extend(menu.rows.clone());
+
+    let done = |outcome| Run { window: None, counts: counts.clone(), outcome, brought: Vec::new() };
+
+    let Some(choice) = prompt.choose_rows(&rows, "Jump to a task", "") else {
+        return done(Outcome::Cancelled);
+    };
+    if choice == TO_ONE || choice == TO_MANY {
+        return done(Outcome::SwitchMode { to: choice });
+    }
+    if let Some(workspace) = choice.strip_prefix(picker::PIN) {
+        return done(Outcome::PinToggled { workspace: workspace.to_string() });
+    }
+    if choice == here {
+        return done(Outcome::SameWorkspace);
+    }
+    if !rows.iter().any(|r| r.id == choice && r.marker.is_none()) {
+        return done(Outcome::Heading);
+    }
+    if !wm.focus_workspace(&choice) {
+        return done(Outcome::MoveFailed { to: choice });
+    }
+    done(Outcome::Jumped { to: choice })
 }
 
 pub enum Session {
@@ -430,23 +495,49 @@ pub fn run_session(
     follow: &[String],
     pins: &[String],
 ) -> Session {
-    let mut mode = Mode::One;
+    run_session_from(Mode::One, wm, prompt, cfg, cached, follow, pins)
+}
+
+/// The same, opened on a given tab — so a key can go straight to jumping.
+pub fn run_session_from(
+    start: Mode,
+    wm: &dyn WindowManager,
+    prompt: &dyn Prompt,
+    cfg: &Config,
+    cached: &[String],
+    follow: &[String],
+    pins: &[String],
+) -> Session {
+    let mut mode = start;
     // Toggling is the user's to do as often as they like; the bound is only
     // here so a prompt that always answers "switch" cannot spin forever.
     for _ in 0..16 {
+        let switched = |to: &str| match to {
+            TO_MANY => Mode::Many,
+            TO_JUMP => Mode::Jump,
+            _ => Mode::One,
+        };
         match mode {
             Mode::One => {
                 let run = run(wm, prompt, cfg, cached, follow, pins);
-                if run.outcome == Outcome::SwitchMode {
-                    mode = Mode::Many;
+                if let Outcome::SwitchMode { to } = &run.outcome {
+                    mode = switched(to);
+                    continue;
+                }
+                return Session::Single(run);
+            }
+            Mode::Jump => {
+                let run = run_jump(wm, prompt, cfg, cached, pins);
+                if let Outcome::SwitchMode { to } = &run.outcome {
+                    mode = switched(to);
                     continue;
                 }
                 return Session::Single(run);
             }
             Mode::Many => {
                 let batch = run_many(wm, prompt, cfg, cached, follow, pins);
-                if batch.aborted == Some(Outcome::SwitchMode) {
-                    mode = Mode::One;
+                if let Some(Outcome::SwitchMode { to }) = &batch.aborted {
+                    mode = switched(to);
                     continue;
                 }
                 return Session::Batch(batch);

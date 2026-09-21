@@ -28,6 +28,7 @@ Bind it in `~/.aerospace.toml`:
 
 ```toml
 ctrl-alt-cmd-s = 'exec-and-forget /Users/justin/.local/bin/sling'
+ctrl-alt-cmd-i = 'exec-and-forget /Users/justin/.local/bin/sling jump'
 ```
 
 macOS will ask once to let AeroSpace control System Events. That grant is what
@@ -38,6 +39,7 @@ draws the dialog; without it nothing appears.
 | | |
 |---|---|
 | `sling` | the picker |
+| `sling jump` | the picker, opened on the task list — go somewhere |
 | `sling sync` | teach AeroSpace every task, so empty ones persist |
 | `sling snapshot` | record where every window is |
 | `sling restore` | put them back after an AeroSpace restart |

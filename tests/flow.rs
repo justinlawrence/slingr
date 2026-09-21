@@ -485,7 +485,7 @@ impl Prompt for Scripted {
 }
 
 #[test]
-fn both_modes_are_offered_as_tabs_with_the_showing_one_marked() {
+fn every_mode_is_offered_as_a_tab_with_the_showing_one_marked() {
     let wm = FakeWm::new();
     let prompt = Scripted::new(vec![Step::Pick(TO_MANY.into()), Step::Select(vec![1])]);
     let _ = app::run_session(&wm, &prompt, &config(), &[], &[], &[]);
@@ -498,7 +498,7 @@ fn both_modes_are_offered_as_tabs_with_the_showing_one_marked() {
     assert_eq!(with_tabs.len(), 2, "one tab strip per mode chooser");
 
     for tabs in &with_tabs {
-        assert_eq!(tabs.len(), 2, "both modes should always be offered");
+        assert_eq!(tabs.len(), 3, "every mode should always be offered");
         assert_eq!(tabs.iter().filter(|(_, active)| *active).count(), 1);
     }
     assert!(with_tabs[0].iter().any(|(id, active)| id == TO_ONE && *active));
@@ -815,4 +815,39 @@ fn a_follower_on_another_screen_is_left_alone() {
 
     let brought: Vec<&str> = run.brought.iter().map(|(w, _)| w.id.as_str()).collect();
     assert_eq!(brought, vec!["7695"], "only the follower sharing this screen should move");
+}
+
+
+#[test]
+fn jumping_goes_to_a_task_without_moving_anything() {
+    let wm = FakeWm::new();
+    let run = app::run_jump(&wm, &FakePrompt::picking("ac-app"), &config(), &[], &[]);
+
+    assert_eq!(run.outcome, Outcome::Jumped { to: "ac-app".into() });
+    // Nothing is slung: no window is named and none is moved.
+    assert!(run.window.is_none());
+    assert!(wm.calls.borrow().iter().all(|c| !matches!(c, Call::MoveById(..))));
+}
+
+#[test]
+fn jumping_to_where_you_already_are_does_nothing() {
+    let wm = FakeWm::new();
+    let run = app::run_jump(&wm, &FakePrompt::picking("infra"), &config(), &[], &[]);
+    assert_eq!(run.outcome, Outcome::SameWorkspace);
+}
+
+#[test]
+fn a_key_can_open_straight_onto_the_jump_tab() {
+    // The point of a second key: land on the list of tasks, not on the
+    // question of where to send a window.
+    let wm = FakeWm::new();
+    let seen = Capture(RefCell::new(Vec::new()));
+    let _ = app::run_session_from(
+        app::Mode::Jump, &wm, &seen, &config(), &[], &[], &[],
+    );
+    let active: Vec<String> = seen.0.borrow().iter()
+        .filter(|r| r.marker.as_deref() == Some("tab") && r.active)
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(active, vec![sling::picker::TO_JUMP.to_string()]);
 }

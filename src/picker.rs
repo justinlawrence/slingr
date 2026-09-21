@@ -12,8 +12,10 @@ pub const NEW: &str = "＋  new workspace…";
 /// Mode ids. The labels live with the tabs that carry them.
 pub const TO_MANY: &str = "__many__";
 pub const TO_ONE: &str = "__once__";
+pub const TO_JUMP: &str = "__jump__";
 pub const ONCE_LABEL: &str = "sling once";
 pub const MANY_LABEL: &str = "sling many";
+pub const JUMP_LABEL: &str = "jump to";
 
 /// Not a workspace — a standing instruction. AeroSpace cannot put one window
 /// in two places, so "everywhere" is emulated by bringing these along each
