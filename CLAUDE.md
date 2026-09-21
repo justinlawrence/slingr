@@ -20,8 +20,13 @@ is `slingr`.
 
 ```sh
 ./build.sh      # cargo build --release AND swiftc the panel
+./install.sh    # the above, plus the symlink and the herdr plugin
 cargo test      # 84 tests, none of which need AeroSpace or a screen
 ```
+
+`plugin/herdr-plugin.toml` is generated from the `.example` by `install.sh`
+and is git-ignored: herdr needs an absolute path, which a repository cannot
+know.
 
 `cargo build` alone does not build the Swift panel. If `slingr-panel` is missing
 or stale, sling silently falls back to the AppleScript dialog — `slingr paths`

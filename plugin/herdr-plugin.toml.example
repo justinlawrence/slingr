@@ -1,7 +1,8 @@
 # Herdr fires this when the focused tab changes, so AeroSpace can follow along
 # without anything staying resident.
 #
-# Link it with:  herdr plugin link ~/Dev/slingr/plugin
+# herdr needs an absolute path, which a repository cannot know, so `install.sh`
+# writes the real one into plugin/herdr-plugin.toml and links that.
 
 id = "slingr"
 name = "slingr"
@@ -12,4 +13,4 @@ platforms = ["macos"]
 
 [[events]]
 on = "tab.focused"
-command = ["/Users/justin/Dev/slingr/target/release/slingr", "goto"]
+command = ["SLINGR_BINARY", "goto"]

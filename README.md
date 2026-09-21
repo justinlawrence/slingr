@@ -7,10 +7,10 @@ Press one key, pick a task, and the focused window moves there.
 
 ```
 ＋  new workspace…
-──────  tyto  ──────
+──────  work  ──────
 ✓  t-forms
    t-pair
-──────  art corner  ──────
+──────  side project  ──────
 ●  ac-app  (this window is here)
 ```
 
@@ -56,7 +56,7 @@ switches to selecting several:
 ```
 ⇄  several windows…          <- switches the list
 ＋  new workspace…
-──────  tyto  ──────
+──────  work  ──────
 ✓  t-forms
 ```
 

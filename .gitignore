@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .DS_Store
 target/
+# written by install.sh from the .example
+plugin/herdr-plugin.toml

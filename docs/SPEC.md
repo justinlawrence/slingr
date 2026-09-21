@@ -32,10 +32,10 @@ Two pieces answer this, and they are separate:
 - Except for the few that belong to none of them: herdr, WhatsApp. Those are
   tagged to follow, and get dragged to whichever task you sling to next.
 - A new window is a new task unless it is filed against an existing one.
-- The XDR is not part of the rotation. It watches `tytoctl up` and nothing else.
+- The XDR is not part of the rotation. It watches `the stack` and nothing else.
 
 Workspace names mirror herdr tabs with `-` where herdr uses `/`: `t/forms`
-becomes `t-forms`. The prefix is the project — `t` tyto, `ac` art corner, `me`
+becomes `t-forms`. The prefix is the project — `w` work, `s` side project, `me`
 personal — and the menu groups on it.
 
 Since a task is usually a herdr tab, the tabs are read from herdr rather than
@@ -55,7 +55,7 @@ whichever task is chosen.
 
 ```
 slingr ◈
-[icon] Brave Browser   Inbox (578) — Arty Corner Mail
+[icon] Brave Browser   Inbox (578) — Weekly Report
 [ slingr once ] slingr many  jump to           ＋ new workspace
 ❯ type to filter tasks
 HERE
@@ -124,7 +124,7 @@ asked for that one.
 
 ## Two screens
 
-The second display is not part of the task rotation: it watches `tytoctl` and
+The second display is not part of the task rotation: it watches a long-running build and
 is glanced at, not switched between. Nothing declares this — it falls out of
 one rule.
 
@@ -170,7 +170,7 @@ the ones that moved nothing:
 
 ```json
 {"at":"2026-09-20T04:12:00Z","outcome":"moved","from":"infra",
- "window":{"id":"11513","app":"Brave Browser","title":"Arty Corner Mail"},
+ "window":{"id":"11513","app":"Brave Browser","title":"Weekly Report"},
  "to":"ac-app","created":false}
 ```
 
@@ -306,7 +306,7 @@ ctrl-alt-cmd-n = 'list-workspaces --monitor focused --empty no | workspace --std
   finally literal.
 - **An inline rename field**, so `＋ new workspace` stops bouncing out to an
   AppleScript text dialog — the last piece of the old UI still in the flow.
-- **Routing rules** — Chrome to `agents`, the `justin@artycorner.uk` profile to
+- **Routing rules** — Chrome to `agents`, the `work@example.com` profile to
   `ac-*`. Written once, caused a window-flashing loop, removed. Re-add one at a
   time, specific first, with no fall-through.
 - **`persistent-workspaces` could replace `known` and `seen.json`** now that
