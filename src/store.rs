@@ -359,3 +359,82 @@ impl Pins {
         Ok(())
     }
 }
+
+/// Where windows were deliberately put, read back out of the action log.
+///
+/// The log is cumulative and survives a reboot, which the snapshot does not:
+/// window ids are all new after one, and the automatic snapshot overwrites the
+/// good layout with the scattered one as soon as anything changes. What
+/// survives is the app and title of every window ever slung, and where it was
+/// sent — enough to put most of them back.
+///
+/// The last destination wins, so a window slung twice ends where it ended up.
+pub fn placements_from_log() -> Vec<((String, String), String)> {
+    let path = ActionLog::default().path().clone();
+    fs::read_to_string(path).map(|text| placements_from(&text)).unwrap_or_default()
+}
+
+pub fn placements_from(text: &str) -> Vec<((String, String), String)> {
+    let mut out: Vec<((String, String), String)> = Vec::new();
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if row["outcome"].as_str() != Some("moved") {
+            continue;
+        }
+        let (Some(to), Some(app), Some(title)) = (
+            row["to"].as_str(),
+            row["window"]["app"].as_str(),
+            row["window"]["title"].as_str(),
+        ) else {
+            continue;
+        };
+        if app.is_empty() && title.is_empty() {
+            continue;
+        }
+        let key = (app.to_string(), title.to_string());
+        out.retain(|(k, _)| *k != key);
+        out.push((key, to.to_string()));
+    }
+    out
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    const LOG: &str = r#"
+{"outcome":"moved","to":"ac-app","window":{"app":"Brave","title":"Framing"}}
+{"outcome":"cancelled","window":{"app":"Brave","title":"Framing"}}
+{"outcome":"moved","to":"t-pair","window":{"app":"Brave","title":"Framing"}}
+{"outcome":"moved","to":"mail","window":{"app":"Mail","title":"Inbox"}}
+{"outcome":"heading","to":"nowhere","window":{"app":"X","title":"Y"}}
+not json
+"#;
+
+    #[test]
+    fn the_last_deliberate_placement_wins() {
+        let placed = placements_from(LOG);
+        let found: Vec<(&str, &str)> =
+            placed.iter().map(|((a, t), w)| (a.as_str(), w.as_str())).collect();
+        assert!(found.contains(&("Brave", "t-pair")), "{found:?}");
+        assert!(!found.iter().any(|(_, w)| *w == "ac-app"), "superseded: {found:?}");
+        assert!(found.contains(&("Mail", "mail")));
+    }
+
+    #[test]
+    fn only_moves_count_as_placements() {
+        // A cancelled pick expresses no intent, and a heading names no task.
+        let placed = placements_from(LOG);
+        assert_eq!(placed.len(), 2, "{placed:?}");
+    }
+
+    #[test]
+    fn survives_a_log_it_cannot_read() {
+        assert!(placements_from("").is_empty());
+        assert!(placements_from("garbage
+{}
+").is_empty());
+    }
+}

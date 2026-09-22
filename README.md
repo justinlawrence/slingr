@@ -117,13 +117,20 @@ AeroSpace does not remember which workspace a window belongs to. Restart it and
 everything lands in whatever each monitor happens to be showing — which, with
 forty-odd windows, is an evening's sorting lost.
 
-`slingr snapshot` writes the mapping to `~/.local/state/slingr/layout.json`, and
-`slingr restore` puts it back. The watcher snapshots automatically on every
-workspace change, so there is normally a current one without thinking about it.
+`slingr restore` puts windows back, from two sources:
 
-Restore matches by window id first, then by application and title, so a window
-whose application has restarted since the snapshot still finds its way home.
-Windows that no longer exist are skipped.
+| | |
+|---|---|
+| the action log | every window you deliberately slung, and where you sent it |
+| `layout.json` | a snapshot of where everything was, taken automatically |
+
+The log is asked first, because it records **intent** and the snapshot records
+**happenstance**. That matters most after a reboot: every window id is new, and
+the automatic snapshot writes down the scattered state as soon as anything
+moves — so the snapshot ends up agreeing that your windows belong in the pile
+they landed in. The log does not, because you never asked for that.
+
+Windows that follow you are skipped: they are wherever you are on purpose.
 
 ```sh
 slingr restore --dry-run    # list what would move

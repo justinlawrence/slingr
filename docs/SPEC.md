@@ -269,10 +269,21 @@ AeroSpace does not remember which workspace a window belongs to. Restart it and
 everything lands in whatever each monitor happens to be showing — an evening's
 sorting lost, which is exactly what happened during the upgrade.
 
-`slingr snapshot` writes the mapping and `slingr restore` replays it, matching by
-window id first and then by application and title, so a window whose
-application has restarted still finds its way home. The snapshot is taken
-automatically on every workspace change.
+`slingr snapshot` writes the mapping and `slingr restore` replays it. After a
+reboot the snapshot alone is worthless, and worse than worthless: every window
+id is new, so nothing matches by id, and the automatic snapshot overwrites the
+good layout with the scattered one the moment anything moves. It then agrees
+that your windows belong in the pile they landed in.
+
+So restore asks the action log first. The log records intent — every window you
+deliberately slung and where you sent it — and intent should outlive an
+observation. The snapshot then covers everything that was never placed by hand.
+Matching is by application and title, since ids do not survive a restart.
+
+Windows that follow you are skipped. They are wherever you are on purpose, and
+putting them back where they once were would undo the thing they are for.
+
+Measured on a real reboot: 43 windows in one pile, 29 of them put back.
 
 ## Configuration that AeroSpace now carries itself
 

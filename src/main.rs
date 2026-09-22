@@ -697,45 +697,84 @@ fn snapshot() -> Result<usize> {
 fn restore(dry_run: bool) -> Result<()> {
     use slingr::aerospace::WindowManager;
 
-    let layout = Layout::load();
-    if layout.windows.is_empty() {
-        say!("no snapshot yet — run `slingr snapshot`");
-        return Ok(());
-    }
     let aero = AeroSpace::default();
     let Some(live) = aero.all_windows() else {
         say!("AeroSpace did not answer");
         return Ok(());
     };
-    let here: Vec<(String, String, String)> = live
+
+    // Windows that belong everywhere are wherever you are on purpose. Putting
+    // them back where they once were would undo the thing they are for.
+    let follow = FollowList::load();
+    let followed =
+        |w: &slingr::picker::Window| follow.ids().contains(&w.id) || follow.follows_app(&w.bundle);
+
+    let layout = Layout::load();
+    let by_id: std::collections::BTreeMap<&str, &str> = layout
+        .windows
         .iter()
-        .map(|w| (w.id.clone(), w.app.clone(), w.title.clone()))
+        .map(|p| (p.id.as_str(), p.workspace.as_str()))
         .collect();
-    let now: std::collections::BTreeMap<&str, &str> =
-        live.iter().map(|w| (w.id.as_str(), w.workspace.as_str())).collect();
+    let by_name: std::collections::BTreeMap<(&str, &str), &str> = layout
+        .windows
+        .iter()
+        .map(|p| ((p.app.as_str(), p.title.as_str()), p.workspace.as_str()))
+        .collect();
+    let logged = store::placements_from_log();
 
     let began = Instant::now();
-    let (mut moved, mut failed, mut already) = (0, 0, 0);
-    for (id, workspace) in layout.resolve(&here) {
-        if now.get(id) == Some(&workspace) {
+    let (mut moved, mut failed, mut already, mut skipped, mut unknown) = (0, 0, 0, 0, 0);
+    let (mut from_snapshot, mut from_log) = (0, 0);
+
+    for w in &live {
+        if followed(w) {
+            skipped += 1;
+            continue;
+        }
+        // The log is asked first, because it records intent and the snapshot
+        // records happenstance. A window deliberately slung to a task should
+        // go back there even though a later snapshot merely observed it
+        // sitting somewhere else — which is exactly what a reboot produces,
+        // since the automatic snapshot writes down the scattered state.
+        //
+        // The snapshot then covers everything that was never slung by hand.
+        let want = logged
+            .iter()
+            .find(|((app, title), _)| *app == w.app && *title == w.title)
+            .map(|(_, ws)| (ws.as_str(), false))
+            .or_else(|| by_id.get(w.id.as_str()).map(|ws| (*ws, true)))
+            .or_else(|| by_name.get(&(w.app.as_str(), w.title.as_str())).map(|ws| (*ws, true)));
+
+        let Some((target, exact)) = want else {
+            unknown += 1;
+            continue;
+        };
+        if w.workspace == target {
             already += 1;
             continue;
         }
         if dry_run {
-            say!("would move {id} -> {workspace}");
+            say!("  {} -> {target}   ({})", w.label(), if exact { "snapshot" } else { "log" });
             moved += 1;
-        } else if aero.move_window(id, workspace) {
+        } else if aero.move_window(&w.id, target) {
             moved += 1;
+            if exact {
+                from_snapshot += 1;
+            } else {
+                from_log += 1;
+            }
         } else {
             failed += 1;
         }
     }
-    let missing = layout.windows.len() - moved - failed - already;
+
     say!(
-        "snapshot from {}: {moved} moved, {already} already right, {failed} failed, {missing} gone ({:.1}s)",
-        layout.at,
+        "{moved} moved, {already} already right, {skipped} follow you, {unknown} never placed, {failed} failed ({:.1}s)",
         began.elapsed().as_secs_f32()
     );
+    if from_snapshot > 0 || from_log > 0 {
+        say!("  {from_snapshot} from the snapshot, {from_log} from the action log");
+    }
     Ok(())
 }
 
