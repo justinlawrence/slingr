@@ -372,6 +372,30 @@ Ask `list-workspaces --focused` instead. The bug was invisible while empty
 workspaces could not be reached, and appeared the moment they could — which is
 the usual shape of a guard that is doing two jobs.
 
+## Focus crossing a workspace takes you with it
+
+AeroSpace follows the focused window, so anything that moves focus to a window
+in another workspace moves *you*. There is no setting for this; it is the same
+mechanism that makes clicking a window switch you to its task, which is
+usually what you want.
+
+It is not usually what you want when macOS chooses the window rather than you:
+
+- Clicking an application's Dock icon activates it, which focuses one of its
+  existing windows, wherever that is. Verified: with the only Finder window in
+  `t-pair`, clicking the Dock icon from `t-tabcols` lands you in `t-pair`.
+- Closing a window hands focus to whichever window macOS picks next, which can
+  be anywhere.
+
+The fix is not to fight the focus rule but to remove the reason focus leaves:
+an application whose windows are always with you can never pull you elsewhere.
+Following Finder as an *application* does that, and it has to be the
+application rather than a window, since Finder opens and closes windows all
+day and a window id does not survive that.
+
+The closing case then improves on its own. Focus falls to whatever is nearby,
+and what is nearby is whatever follows you — so followers act as a catcher.
+
 ## AeroSpace has no sticky windows## herdr can emit phantom focus events in bursts
 
 Reported against herdr: on an idle session with several agent panes producing
@@ -444,6 +468,30 @@ AeroSpace did not answer          # wrong: it answered, there was just no window
 Ask `list-workspaces --focused` instead. The bug was invisible while empty
 workspaces could not be reached, and appeared the moment they could — which is
 the usual shape of a guard that is doing two jobs.
+
+## Focus crossing a workspace takes you with it
+
+AeroSpace follows the focused window, so anything that moves focus to a window
+in another workspace moves *you*. There is no setting for this; it is the same
+mechanism that makes clicking a window switch you to its task, which is
+usually what you want.
+
+It is not usually what you want when macOS chooses the window rather than you:
+
+- Clicking an application's Dock icon activates it, which focuses one of its
+  existing windows, wherever that is. Verified: with the only Finder window in
+  `t-pair`, clicking the Dock icon from `t-tabcols` lands you in `t-pair`.
+- Closing a window hands focus to whichever window macOS picks next, which can
+  be anywhere.
+
+The fix is not to fight the focus rule but to remove the reason focus leaves:
+an application whose windows are always with you can never pull you elsewhere.
+Following Finder as an *application* does that, and it has to be the
+application rather than a window, since Finder opens and closes windows all
+day and a window id does not survive that.
+
+The closing case then improves on its own. Focus falls to whatever is nearby,
+and what is nearby is whatever follows you — so followers act as a catcher.
 
 ## AeroSpace has no sticky windows
 

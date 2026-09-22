@@ -188,10 +188,21 @@ in advance. `slingr stats` summarises it. The questions it should answer:
 
 ## Windows that belong everywhere
 
-Some windows are not part of any one task: herdr, WhatsApp. `Show on all
-workspaces` is a standing instruction rather than a destination, so it reads as
-an ordinary row that carries a tick instead of an action that announces itself.
-The window stays where it is and joins a follow list.
+Some windows are not part of any one task: herdr, WhatsApp, Finder. These are
+standing instructions rather than destinations, so they read as ordinary rows
+carrying a tick instead of actions that announce themselves.
+
+There are two, because "belongs everywhere" is sometimes about a window and
+sometimes about an application. The herdr terminal is one Ghostty window among
+several and only that one should follow. Finder is the opposite: it opens and
+closes windows all day, so following a particular window is useless and a
+window id does not survive it — what you mean is that Finder belongs
+everywhere.
+
+Following an application also settles a problem that looks unrelated. AeroSpace
+follows the focused window, so activating an app from the Dock focuses one of
+its windows wherever that is, and takes you there. An application that is
+always with you cannot do that.
 
 AeroSpace has no sticky windows — the string does not appear anywhere in its
 binary, and issue #2 has been open since the beginning — so this is emulation.

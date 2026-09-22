@@ -21,6 +21,8 @@ pub const JUMP_LABEL: &str = "jump to";
 /// in two places, so "everywhere" is emulated by bringing these along each
 /// time something is slung.
 pub const ALL: &str = "∞  all workspaces";
+/// The same, for every window the application has.
+pub const ALL_APP: &str = "__all_app__";
 
 /// What the panel sends back when a row is pinned or unpinned rather than
 /// chosen. The list has to be rebuilt afterwards, so it reopens.
@@ -200,7 +202,11 @@ fn shorten(text: &str, limit: usize) -> String {
 /// normally the one being drained. `follow` marks the windows that come along
 /// to every task, so their standing instruction is visible in the list rather
 /// than only on the row that sets it.
-pub fn build_window_menu(windows: &[Window], first: &str, follow: &[String]) -> WindowMenu {
+pub fn build_window_menu(
+    windows: &[Window],
+    first: &str,
+    follows: impl Fn(&Window) -> bool,
+) -> WindowMenu {
     let mut groups: BTreeMap<String, Vec<&Window>> = BTreeMap::new();
     for w in windows {
         groups.entry(w.workspace.clone()).or_default().push(w);
@@ -243,7 +249,7 @@ pub fn build_window_menu(windows: &[Window], first: &str, follow: &[String]) -> 
                 section: Some(workspace.clone()),
                 count: None,
                 marker: None,
-                pinned: follow.contains(&w.id),
+                pinned: follows(w),
                 detail: None,
                 active: false,
                 bundle: Some(w.bundle.clone()),

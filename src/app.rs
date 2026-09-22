@@ -9,7 +9,25 @@ use std::collections::BTreeMap;
 use crate::aerospace::WindowManager;
 use crate::config::Config;
 use crate::dialog::Prompt;
-use crate::picker::{self, Window, ALL, NEW, TO_JUMP, TO_MANY, TO_ONE};
+use crate::picker::{self, Window, ALL, ALL_APP, NEW, TO_JUMP, TO_MANY, TO_ONE};
+
+/// What comes along to every task: named windows, and whole applications.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Following<'a> {
+    pub windows: &'a [String],
+    pub apps: &'a [String],
+}
+
+impl Following<'_> {
+    pub fn is_empty(&self) -> bool {
+        self.windows.is_empty() && self.apps.is_empty()
+    }
+
+    pub fn has(&self, window: &Window) -> bool {
+        self.windows.iter().any(|id| *id == window.id)
+            || (!window.bundle.is_empty() && self.apps.iter().any(|b| *b == window.bundle))
+    }
+}
 
 /// The application that owns sling's own dialog; never a task window.
 const DIALOG_APP: &str = "System Events";
@@ -41,9 +59,11 @@ pub enum Outcome {
     MoveFailed { to: String },
     Moved { to: String, created: bool },
     /// Added to the follow list: comes along to every task from now on.
-    Following,
+    /// `whole_app` distinguishes following this window from following every
+    /// window its application has.
+    Following { whole_app: bool },
     /// Taken off it.
-    Unfollowing,
+    Unfollowing { whole_app: bool },
     /// Went to a task rather than sending anything to one.
     Jumped { to: String },
 }
@@ -62,8 +82,8 @@ impl Outcome {
             Outcome::RefocusFailed => "refocus_failed",
             Outcome::MoveFailed { .. } => "move_failed",
             Outcome::Moved { .. } => "moved",
-            Outcome::Following => "following",
-            Outcome::Unfollowing => "unfollowing",
+            Outcome::Following { .. } => "following",
+            Outcome::Unfollowing { .. } => "unfollowing",
             Outcome::Jumped { .. } => "jumped",
         }
     }
@@ -93,7 +113,7 @@ pub struct Run {
 /// ordinary no-followers case costs nothing extra.
 pub fn follow_to(
     wm: &dyn WindowManager,
-    follow: &[String],
+    follow: Following<'_>,
     target: &str,
     already_moved: &str,
     only_from: Option<&str>,
@@ -107,7 +127,7 @@ pub fn follow_to(
     };
     let mut brought = Vec::new();
     for w in all.into_iter().filter(|w| {
-        follow.contains(&w.id)
+        follow.has(w)
             && w.id != already_moved
             && w.workspace != target
             && only_from.is_none_or(|from| w.workspace == from)
@@ -142,7 +162,7 @@ pub fn run(
     prompt: &dyn Prompt,
     cfg: &Config,
     cached: &[String],
-    follow: &[String],
+    follow: Following<'_>,
     pins: &[String],
 ) -> Run {
     let Some(window) = wm.focused_window() else {
@@ -178,8 +198,10 @@ pub fn run(
     rows.extend(menu.rows.clone());
     // Sits with the current workspace, because both answer the same question:
     // where this window lives. An ordinary row, so it can carry a tick.
-    let showing_everywhere = follow.contains(&window.id);
-    if showing_everywhere {
+    let showing_everywhere = follow.windows.iter().any(|id| *id == window.id);
+    let app_everywhere =
+        !window.bundle.is_empty() && follow.apps.iter().any(|b| *b == window.bundle);
+    if showing_everywhere || app_everywhere {
         // A window shown everywhere is not in any one workspace, so the
         // workspace it happens to be sitting in must not claim it too.
         for row in &mut rows {
@@ -198,7 +220,19 @@ pub fn run(
             .map(|found| found + 1)
             .unwrap_or(rows.len())
     };
-    rows.insert(at, picker::Row::toggle(ALL, "Show on all workspaces", showing_everywhere));
+    rows.insert(at, picker::Row::toggle(ALL, "Show this window on all workspaces", showing_everywhere));
+    if !window.bundle.is_empty() {
+        // Finder opens and closes windows all day; following one of them is
+        // useless. Following the application is the thing you mean.
+        rows.insert(
+            at + 1,
+            picker::Row::toggle(
+                ALL_APP,
+                &format!("Show every {} window on all workspaces", window.app),
+                app_everywhere,
+            ),
+        );
+    }
 
     // The window itself is shown in the header, icon and all, so this only
     // has to carry anything unusual.
@@ -230,10 +264,17 @@ pub fn run(
     if choice == ALL {
         // A standing instruction, not a destination: the window stays where it
         // is and comes along next time something is slung.
-        return done(if follow.contains(&window.id) {
-            Outcome::Unfollowing
+        return done(if showing_everywhere {
+            Outcome::Unfollowing { whole_app: false }
         } else {
-            Outcome::Following
+            Outcome::Following { whole_app: false }
+        });
+    }
+    if choice == ALL_APP {
+        return done(if app_everywhere {
+            Outcome::Unfollowing { whole_app: true }
+        } else {
+            Outcome::Following { whole_app: true }
         });
     }
 
@@ -302,7 +343,7 @@ pub fn run_many(
     prompt: &dyn Prompt,
     cfg: &Config,
     cached: &[String],
-    follow: &[String],
+    follow: Following<'_>,
     pins: &[String],
 ) -> Batch {
     let Some(all) = wm.all_windows() else {
@@ -320,7 +361,7 @@ pub fn run_many(
     // window is in, and a whole group can be taken at once — so the folders
     // are here, in the answer, rather than as a question of their own.
     let from = windows.clone();
-    let menu = picker::build_window_menu(&from, &here, follow);
+    let menu = picker::build_window_menu(&from, &here, |w| follow.has(w));
     let mut rows = tabs(Mode::Many);
     rows.extend(menu.rows.clone());
 
@@ -367,7 +408,10 @@ pub fn run_many(
         // Tag the selection instead of moving it.
         return Batch {
             target: None,
-            results: chosen.into_iter().map(|w| (w, Outcome::Following)).collect(),
+            results: chosen
+                .into_iter()
+                .map(|w| (w, Outcome::Following { whole_app: false }))
+                .collect(),
             aborted: None,
         };
     }
@@ -492,7 +536,7 @@ pub fn run_session(
     prompt: &dyn Prompt,
     cfg: &Config,
     cached: &[String],
-    follow: &[String],
+    follow: Following<'_>,
     pins: &[String],
 ) -> Session {
     run_session_from(Mode::One, wm, prompt, cfg, cached, follow, pins)
@@ -505,7 +549,7 @@ pub fn run_session_from(
     prompt: &dyn Prompt,
     cfg: &Config,
     cached: &[String],
-    follow: &[String],
+    follow: Following<'_>,
     pins: &[String],
 ) -> Session {
     let mut mode = start;

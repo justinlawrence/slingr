@@ -177,7 +177,7 @@ fn sling_in(start: app::Mode) -> Result<()> {
             prompt.as_ref(),
             &cfg,
             &cache.workspaces,
-            &follow.ids(),
+            app::Following { windows: &follow.ids(), apps: &follow.bundles() },
             &pins.tasks,
         );
         match session {
@@ -197,13 +197,16 @@ fn sling_in(start: app::Mode) -> Result<()> {
 
 /// Toggle membership of the follow list for whatever the outcome says.
 fn apply_follow(outcome: &Outcome, window: Option<&Window>, follow: &mut FollowList) -> Result<()> {
-    let (Some(w), true) = (
-        window,
-        matches!(outcome, Outcome::Following | Outcome::Unfollowing),
-    ) else {
-        return Ok(());
-    };
-    follow.toggle(&w.id, &w.app, &w.title);
+    let Some(w) = window else { return Ok(()) };
+    match outcome {
+        Outcome::Following { whole_app: true } | Outcome::Unfollowing { whole_app: true } => {
+            follow.toggle_app(&w.bundle, &w.app);
+        }
+        Outcome::Following { .. } | Outcome::Unfollowing { .. } => {
+            follow.toggle(&w.id, &w.app, &w.title);
+        }
+        _ => return Ok(()),
+    }
     follow.save()
 }
 
@@ -272,7 +275,14 @@ fn follow_now() -> Result<()> {
     // Only the screen being worked on. Clicking a window on another display
     // must not pull everything across to it.
     let on = aero.focused_monitor();
-    let brought = app::follow_to(&aero, &follow.ids(), &here, "", None, on.as_deref());
+    let brought = app::follow_to(
+        &aero,
+        app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+        &here,
+        "",
+        None,
+        on.as_deref(),
+    );
     if !brought.is_empty() {
         say!("brought {} to {here}", brought.len());
     }
@@ -298,9 +308,13 @@ fn list_following(prune: bool) -> Result<()> {
     use slingr::aerospace::WindowManager;
 
     let mut follow = FollowList::load();
-    if follow.windows.is_empty() {
+    if follow.windows.is_empty() && follow.apps.is_empty() {
         say!("nothing follows you yet — pick \"all workspaces\" in the picker");
         return Ok(());
+    }
+
+    for a in &follow.apps {
+        say!("  every  {} ({})", a.name, a.bundle);
     }
 
     // Window ids do not survive the application restarting, so an entry can
@@ -461,7 +475,14 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
                 let follow = FollowList::load();
                 if !follow.windows.is_empty() {
                     let on = aero.focused_monitor();
-                    app::follow_to(&aero, &follow.ids(), &workspace, "", None, on.as_deref());
+                    app::follow_to(
+                        &aero,
+                        app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+                        &workspace,
+                        "",
+                        None,
+                        on.as_deref(),
+                    );
                 }
                 let _ = snapshot();
             }
@@ -546,8 +567,14 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
                 // the terminal lives in exactly one.
                 let t0 = Instant::now();
                 let on = aero.focused_monitor();
-                let brought =
-                    app::follow_to(aero, &follow.ids(), &target, "", Some(&here), on.as_deref());
+                let brought = app::follow_to(
+                    aero,
+                    app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+                    &target,
+                    "",
+                    Some(&here),
+                    on.as_deref(),
+                );
                 let follow_ms = t0.elapsed().as_millis();
                 if follow_ms > 8000 {
                     say!(

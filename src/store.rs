@@ -158,6 +158,22 @@ mod tests {
 pub struct FollowList {
     #[serde(default)]
     pub windows: Vec<Follower>,
+    /// Whole applications, by bundle id.
+    ///
+    /// Following a window is right for one of several — the herdr terminal
+    /// among other terminals. Following an application is right when its
+    /// windows are interchangeable and short-lived: Finder opens and closes
+    /// windows all day, and "Finder belongs everywhere" is a fact about
+    /// Finder, not about whichever window happens to be open.
+    #[serde(default)]
+    pub apps: Vec<FollowedApp>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FollowedApp {
+    pub bundle: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +199,25 @@ impl FollowList {
 
     pub fn ids(&self) -> Vec<String> {
         self.windows.iter().map(|w| w.id.clone()).collect()
+    }
+
+    pub fn bundles(&self) -> Vec<String> {
+        self.apps.iter().map(|a| a.bundle.clone()).collect()
+    }
+
+    pub fn follows_app(&self, bundle: &str) -> bool {
+        !bundle.is_empty() && self.apps.iter().any(|a| a.bundle == bundle)
+    }
+
+    /// Returns true if the application is now followed.
+    pub fn toggle_app(&mut self, bundle: &str, name: &str) -> bool {
+        if let Some(at) = self.apps.iter().position(|a| a.bundle == bundle) {
+            self.apps.remove(at);
+            false
+        } else {
+            self.apps.push(FollowedApp { bundle: bundle.to_string(), name: name.to_string() });
+            true
+        }
     }
 
     pub fn contains(&self, id: &str) -> bool {

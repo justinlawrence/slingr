@@ -131,10 +131,17 @@ slingr restore --dry-run    # list what would move
 
 ## Windows that belong everywhere
 
-Some windows — herdr, WhatsApp — are not part of any one task. Pick
-`∞  all workspaces` and that window joins the follow list: it stays where it
-is, and comes along to whichever task you sling something to next. Picking it
-again takes it off.
+Some windows are not part of any one task. The picker offers two rows for it:
+
+| | |
+|---|---|
+| `Show this window on all workspaces` | one window of several — the herdr terminal among other terminals |
+| `Show every Finder window on all workspaces` | the whole application, for one whose windows are interchangeable and short-lived |
+
+Following an application also stops it dragging you around: clicking a Dock
+icon activates the app, which focuses one of its windows *wherever that is*,
+and AeroSpace follows focus. If its windows are always with you, there is
+nowhere else to be pulled to.
 
 AeroSpace has no sticky windows — a window is in exactly one workspace and
 nothing can change that — so this is emulation. `slingr watch` subscribes to
