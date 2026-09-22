@@ -396,6 +396,32 @@ day and a window id does not survive that.
 The closing case then improves on its own. Focus falls to whatever is nearby,
 and what is nearby is whatever follows you — so followers act as a catcher.
 
+## Switching a workspace takes the keyboard with it
+
+`aerospace workspace X` focuses whatever X happened to hold. That is right when
+you asked for a workspace and wrong when you asked for a herdr tab: your hands
+are in the terminal, and the switch takes the keyboard out from under them, so
+the next click on a tab is spent getting focus back rather than changing tab.
+
+It went unnoticed while the task workspaces were empty — with nothing else to
+focus, the terminal kept it by default. Restoring a real layout into them is
+what surfaced it.
+
+Focus the window instead of the workspace: focusing a window goes to its
+workspace, so one operation does both and there is nothing in between for the
+`exec-on-workspace-change` callback to race.
+
+## A lock file that outlives its process is a silent off switch
+
+`goto` takes a lock so a burst of herdr events cannot pile up. Writing the pid
+and leaving the file behind meant the next run had to judge whether that pid
+was alive — and a pid reused by something unrelated makes the lock look held
+for ever. The hook then does nothing, silently, which is worse than the
+pile-up. It removes itself now, and a refusal is recorded rather than silent.
+
+Recording it was what showed the rest: more `goto` runs than tab switches, and
+real switches being eaten while a heavier predecessor was still going.
+
 ## AeroSpace has no sticky windows## herdr can emit phantom focus events in bursts
 
 Reported against herdr: on an idle session with several agent panes producing
@@ -492,6 +518,32 @@ day and a window id does not survive that.
 
 The closing case then improves on its own. Focus falls to whatever is nearby,
 and what is nearby is whatever follows you — so followers act as a catcher.
+
+## Switching a workspace takes the keyboard with it
+
+`aerospace workspace X` focuses whatever X happened to hold. That is right when
+you asked for a workspace and wrong when you asked for a herdr tab: your hands
+are in the terminal, and the switch takes the keyboard out from under them, so
+the next click on a tab is spent getting focus back rather than changing tab.
+
+It went unnoticed while the task workspaces were empty — with nothing else to
+focus, the terminal kept it by default. Restoring a real layout into them is
+what surfaced it.
+
+Focus the window instead of the workspace: focusing a window goes to its
+workspace, so one operation does both and there is nothing in between for the
+`exec-on-workspace-change` callback to race.
+
+## A lock file that outlives its process is a silent off switch
+
+`goto` takes a lock so a burst of herdr events cannot pile up. Writing the pid
+and leaving the file behind meant the next run had to judge whether that pid
+was alive — and a pid reused by something unrelated makes the lock look held
+for ever. The hook then does nothing, silently, which is worse than the
+pile-up. It removes itself now, and a refusal is recorded rather than silent.
+
+Recording it was what showed the rest: more `goto` runs than tab switches, and
+real switches being eaten while a heavier predecessor was still going.
 
 ## AeroSpace has no sticky windows
 

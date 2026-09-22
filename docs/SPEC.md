@@ -225,9 +225,21 @@ following` shows the list and re-tagging is one pick.
 Slinging files a window under a task. The rest keeps the pair in step: a task
 is a herdr tab *and* a workspace, so arriving at either brings the other.
 
-- herdr tab changes → AeroSpace goes to the matching workspace
+- herdr tab changes → AeroSpace goes to the matching workspace, and the
+  keyboard stays where it was
 - AeroSpace workspace changes → herdr focuses the matching tab, however you
   got there: a keybinding, the menu bar, or clicking a window
+
+Arriving is done by focusing the window you were typing in, rather than by
+asking for the workspace and then correcting the focus it chose. Focusing a
+window goes to its workspace, so that is one operation with nothing in between
+and nothing to race the callback AeroSpace fires on the change.
+
+Only a window that *follows* you counts as the one you were typing in.
+Preserving whatever happens to hold focus sounds more general and is worse: let
+anything else grab it once — an app raising itself, a notification — and every
+switch afterwards hands focus faithfully back to it. A follower is with you by
+design; anything else is a coincidence.
 
 Not every workspace has a tab — `house`, `mail` and the second screen are tasks
 with nobody behind them — so a miss is ordinary and means do nothing.

@@ -212,22 +212,45 @@ fn apply_follow(outcome: &Outcome, window: Option<&Window>, follow: &mut FollowL
 
 /// One at a time. herdr has been reported to emit focus events in bursts, and
 /// a hook that spawns a process per event must not pile them up.
-fn only_one(name: &str) -> Option<std::fs::File> {
+///
+/// The lock removes itself. Leaving the file behind means the next run has to
+/// judge a recorded pid, and a pid that has been reused by something unrelated
+/// makes the lock look held for ever — the hook then does nothing, silently,
+/// which is far worse than the pile-up it was guarding against.
+struct OnlyOne(std::path::PathBuf);
+
+impl Drop for OnlyOne {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn only_one(name: &str) -> Option<OnlyOne> {
     use std::io::Write;
+
     let path = store::state_dir().join(format!("{name}.lock"));
     std::fs::create_dir_all(store::state_dir()).ok()?;
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(pid) = text.trim().parse::<i32>() {
-            // Signal 0 asks whether the process exists without disturbing it.
-            let alive = unsafe { libc_kill(pid, 0) } == 0;
-            if alive {
+
+    // Exclusive creation is the whole lock: whoever makes the file holds it.
+    let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(f) => f,
+        Err(_) => {
+            // Someone holds it, or something died without cleaning up. Only
+            // the second case may be taken over.
+            let stale = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| t.trim().parse::<i32>().ok())
+                .map(|pid| unsafe { libc_kill(pid, 0) } != 0)
+                .unwrap_or(true);
+            if !stale {
                 return None;
             }
+            std::fs::remove_file(&path).ok()?;
+            std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok()?
         }
-    }
-    let mut file = std::fs::File::create(&path).ok()?;
+    };
     let _ = write!(file, "{}", std::process::id());
-    Some(file)
+    Some(OnlyOne(path))
 }
 
 extern "C" {
@@ -240,27 +263,104 @@ fn goto_now() -> Result<()> {
     use slingr::watch::{decide, Action};
 
     let Some(_held) = only_one("goto") else {
+        // Another one is mid-flight. Recorded rather than silent: a switch
+        // that quietly does nothing is the hardest kind to notice.
+        note(&json!({ "at": store::iso8601(store::now_unix()), "skipped": "already running" }));
         return Ok(());
     };
     let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
     let tab = slingr::herdr::focused();
     let here = aero.focused_workspace().unwrap_or_default();
-    let counts = aero.window_counts().unwrap_or_default();
+
+    // No window counts: an empty task is somewhere to go, so nothing here
+    // needs to know how full anything is. Listing every window on the hot
+    // path is what made this feel slow.
+    let counts = std::collections::BTreeMap::new();
 
     // No settling to wait for: the hook fires once per actual focus change,
     // so the tab has already stopped moving by the time we are called.
     match decide(tab.as_deref(), tab.as_deref(), &here, &counts) {
         Action::Switch(target) => {
-            aero.focus_workspace(&target);
+            let follow = FollowList::load();
+
+            // Whatever you are typing in — normally the terminal herdr itself
+            // runs in, since changing a tab is what got us here.
+            //
+            // Only a window that follows you counts. Preserving whatever
+            // happens to hold focus sounds more general and is worse: let
+            // anything else grab focus once — an app raising itself, a
+            // notification — and every switch afterwards faithfully hands
+            // focus back to it. A follower is with you by design; anything
+            // else is a coincidence.
+            let hands_on = aero.focused_window().filter(|w| {
+                follow.ids().contains(&w.id) || follow.follows_app(&w.bundle)
+            });
+
+            // Bring the followers before switching, not after. AeroSpace runs
+            // `follow` on the change as well, but doing it here means one
+            // visible rearrangement instead of two.
+            let on = aero.focused_monitor();
+            let brought = app::follow_to(
+                &aero,
+                app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+                &target,
+                "",
+                None,
+                on.as_deref(),
+            );
+
+            // Arrive by focusing the window you are typing in, rather than by
+            // asking for the workspace and then correcting the focus it chose.
+            // Focusing a window goes to its workspace, so this is one
+            // operation with no window in between — and nothing to race with
+            // the callback AeroSpace fires on the change.
+            //
+            // Asking for the workspace focuses whatever the destination
+            // happened to hold. That is right when you asked for a workspace,
+            // and wrong when you asked for a herdr tab: it takes the keyboard
+            // out from under you, and the next tab click is spent getting it
+            // back.
+            // Read off what was just moved rather than asking again. The
+            // window came along if it was carried, or was already there.
+            let came_along = hands_on.as_ref().is_some_and(|w| {
+                w.workspace == target
+                    || brought.iter().any(|(moved, outcome)| {
+                        moved.id == w.id && matches!(outcome, Outcome::Moved { .. })
+                    })
+            });
+            let hands_kept = matches!((came_along, &hands_on), (true, Some(_)));
+            match (came_along, hands_on) {
+                (true, Some(w)) => {
+                    aero.focus(&w.id);
+                }
+                _ => {
+                    aero.focus_workspace(&target);
+                }
+            }
             say!("{here} -> {target}");
+            note(&json!({
+                "at": store::iso8601(store::now_unix()),
+                "goto": target, "from": here,
+                "kept_focus": hands_kept,
+            }));
         }
         Action::Hold(why) => {
             if let Some(t) = &tab {
                 say!("holding: {why} ({t})");
             }
+            note(&json!({
+                "at": store::iso8601(store::now_unix()),
+                "hold": why, "tab": tab, "from": here,
+            }));
         }
     }
     Ok(())
+}
+
+/// A line per herdr-driven switch, so "it sometimes does nothing" is a thing
+/// that can be read rather than guessed at.
+fn note(entry: &serde_json::Value) {
+    let _ = ActionLog::watch().append(entry);
 }
 
 fn follow_now() -> Result<()> {
