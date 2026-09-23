@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use crate::aerospace::WindowManager;
 use crate::config::Config;
 use crate::dialog::Prompt;
-use crate::picker::{self, Window, ALL, ALL_APP, NEW, TO_JUMP, TO_MANY, TO_ONE};
+use crate::picker::{self, Window, ALL, ALL_APP, NEW, TO_JUMP, TO_MANY, TO_ONE, TO_BOARD};
 
 /// What comes along to every task: named windows, and whole applications.
 #[derive(Debug, Clone, Copy, Default)]
@@ -66,6 +66,10 @@ pub enum Outcome {
     Unfollowing { whole_app: bool },
     /// Went to a task rather than sending anything to one.
     Jumped { to: String },
+    /// Went to one particular window from the board, which brings its task
+    /// forward with it. Kept apart from `Jumped` so the log says which of the
+    /// two questions was being answered.
+    Focused { to: String },
 }
 
 impl Outcome {
@@ -85,21 +89,34 @@ impl Outcome {
             Outcome::Following { .. } => "following",
             Outcome::Unfollowing { .. } => "unfollowing",
             Outcome::Jumped { .. } => "jumped",
+            Outcome::Focused { .. } => "focused",
         }
     }
 }
 
 pub struct Run {
     pub window: Option<Window>,
-    /// Windows per workspace, or `None` if AeroSpace did not answer.
-    pub counts: Option<BTreeMap<String, usize>>,
+    /// What each workspace holds, or `None` if AeroSpace did not answer.
+    pub occupancy: Option<BTreeMap<String, picker::Occupancy>>,
     pub outcome: Outcome,
     /// Followers dragged along to the same task.
     pub brought: Vec<(Window, Outcome)>,
 }
 
+/// Nothing is brought along by a sling.
+///
+/// A window that belongs everywhere belongs wherever *you* are, and slinging
+/// does not move you — so sending followers to the target emptied the
+/// workspace you were sitting in and left you staring at nothing. They catch
+/// up by themselves the moment you actually go somewhere, because arriving is
+/// what `exec-on-workspace-change` fires on.
+const NOT_A_MOVE_OF_YOURS: Vec<(Window, Outcome)> = Vec::new();
+
 /// Move the follow list to `target`, skipping the window that was slung there
 /// in its own right and any follower already sitting in it.
+///
+/// Called when you *arrive* somewhere — the `follow` hook, `goto`, `jump` —
+/// never when a window is slung away from you.
 ///
 /// `only_from` is a safety rail, not a filter for tidiness. Moving a window
 /// requires focusing it, and focusing a window in a workspace that is off
@@ -166,25 +183,25 @@ pub fn run(
     pins: &[String],
 ) -> Run {
     let Some(window) = wm.focused_window() else {
-        return Run { window: None, counts: None, outcome: Outcome::NoWindow, brought: Vec::new() };
+        return Run { window: None, occupancy: None, outcome: Outcome::NoWindow, brought: Vec::new() };
     };
     // System Events owns the dialog sling draws. Slinging it would move a
     // dialog into a task and leave the real window where it was.
     if window.app == DIALOG_APP {
         return Run {
             window: Some(window),
-            counts: None,
+            occupancy: None,
             outcome: Outcome::OwnDialog,
             brought: Vec::new(),
         };
     }
 
-    let counts = wm.window_counts();
+    let occupancy = wm.occupancy();
     // Everything AeroSpace knows about, which with persistent-workspaces is
     // every task — including the ones holding nothing yet.
     let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
     let menu = picker::build_menu(
-        counts.as_ref(),
+        occupancy.as_ref(),
         &cfg.known,
         &[cached, &known_to_aerospace].concat(),
         &window.workspace,
@@ -237,13 +254,13 @@ pub fn run(
     // The window itself is shown in the header, icon and all, so this only
     // has to carry anything unusual.
     let mut heading = String::new();
-    if counts.is_none() {
+    if occupancy.is_none() {
         heading.push_str("AeroSpace is not answering — these are remembered names");
     }
 
     let done = |outcome| Run {
         window: Some(window.clone()),
-        counts: counts.clone(),
+        occupancy: occupancy.clone(),
         outcome,
         brought: Vec::new(),
     };
@@ -251,7 +268,7 @@ pub fn run(
     let Some(choice) = prompt.choose_rows(&rows, "Sling window", &heading) else {
         return done(Outcome::Cancelled);
     };
-    if choice == TO_MANY || choice == TO_JUMP {
+    if choice != TO_ONE && picker::is_mode(&choice) {
         return done(Outcome::SwitchMode { to: choice });
     }
     if choice == TO_ONE {
@@ -288,12 +305,11 @@ pub fn run(
         if !wm.move_window(&window.id, &name) {
             return done(Outcome::MoveFailed { to: name });
         }
-        let brought = follow_to(wm, follow, &name, &window.id, None, Some(&window.monitor));
         return Run {
             window: Some(window.clone()),
-            counts: counts.clone(),
+            occupancy: occupancy.clone(),
             outcome: Outcome::Moved { to: name, created: true },
-            brought,
+            brought: NOT_A_MOVE_OF_YOURS,
         };
     }
 
@@ -322,15 +338,12 @@ pub fn run(
         return done(Outcome::MoveFailed { to: target });
     }
 
-    let created = counts.as_ref().map(|c| !c.contains_key(&target)).unwrap_or(false);
-    // Anywhere on this screen: moving by id costs nothing, but a follower on
-    // another display is beside work of its own and should stay there.
-    let brought = follow_to(wm, follow, &target, &window.id, None, Some(&window.monitor));
+    let created = occupancy.as_ref().map(|c| !c.contains_key(&target)).unwrap_or(false);
     Run {
         window: Some(window.clone()),
-        counts: counts.clone(),
+        occupancy: occupancy.clone(),
         outcome: Outcome::Moved { to: target, created },
-        brought,
+        brought: NOT_A_MOVE_OF_YOURS,
     }
 }
 
@@ -374,7 +387,7 @@ pub fn run_many(
     }
 
     let here = wm.focused_workspace().unwrap_or_default();
-    let counts = wm.window_counts().unwrap_or_default();
+    let occupancy = wm.occupancy().unwrap_or_default();
 
     // Which windows, then where. The list is grouped by the workspace each
     // window is in, and a whole group can be taken at once — so the folders
@@ -391,10 +404,7 @@ pub fn run_many(
     ) else {
         return Batch::stopped(Outcome::Cancelled);
     };
-    if let Some(tab) = picked.iter().find(|p| *p == TO_ONE || *p == TO_JUMP) {
-        return Batch::stopped(Outcome::SwitchMode { to: tab.clone() });
-    }
-    if let Some(tab) = picked.iter().find(|p| *p == TO_ONE || *p == TO_JUMP) {
+    if let Some(tab) = picked.iter().find(|p| *p != TO_MANY && picker::is_mode(p)) {
         return Batch::stopped(Outcome::SwitchMode { to: tab.clone() });
     }
     let chosen: Vec<Window> =
@@ -405,7 +415,7 @@ pub fn run_many(
 
     let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
     let targets = picker::build_menu(
-        Some(&counts),
+        Some(&occupancy),
         &cfg.known,
         &[cached, &known_to_aerospace].concat(),
         "",
@@ -444,8 +454,7 @@ pub fn run_many(
         if name.is_empty() {
             return Batch::stopped(Outcome::EmptyName { raw: typed.to_string() });
         }
-        let on = chosen.first().map(|w| w.monitor.clone());
-        let mut results: Vec<(Window, Outcome)> = chosen
+        let results: Vec<(Window, Outcome)> = chosen
             .into_iter()
             .map(|w| {
                 let outcome = if wm.move_window(&w.id, &name) {
@@ -456,7 +465,6 @@ pub fn run_many(
                 (w, outcome)
             })
             .collect();
-        results.extend(follow_to(wm, follow, &name, "", None, on.as_deref()));
         return Batch { target: Some(name), results, aborted: None };
     }
 
@@ -475,10 +483,6 @@ pub fn run_many(
         return Batch::stopped(Outcome::Heading);
     };
 
-    // Noted before the list is consumed: the followers belong to the screen
-    // the batch came from.
-    let on = chosen.first().map(|w| w.monitor.clone());
-
     let mut results = Vec::new();
     for window in chosen {
         let outcome = if window.workspace == target {
@@ -486,14 +490,11 @@ pub fn run_many(
         } else if !wm.move_window(&window.id, &target) {
             Outcome::MoveFailed { to: target.clone() }
         } else {
-            let created = !counts.contains_key(&target);
+            let created = !occupancy.contains_key(&target);
             Outcome::Moved { to: target.clone(), created }
         };
         results.push((window, outcome));
     }
-
-    let brought = follow_to(wm, follow, &target, "", None, on.as_deref());
-    results.extend(brought);
 
     Batch { target: Some(target), results, aborted: None }
 }
@@ -504,15 +505,17 @@ pub enum Mode {
     One,
     Many,
     Jump,
+    Board,
 }
 
-/// The three tabs, with the showing one marked. Built in one place so every
-/// mode offers the same strip and cannot drift.
+/// The tabs, with the showing one marked. Built in one place so every mode
+/// offers the same strip and cannot drift.
 pub fn tabs(showing: Mode) -> Vec<picker::Row> {
     vec![
         picker::Row::tab(TO_ONE, picker::ONCE_LABEL, showing == Mode::One),
         picker::Row::tab(TO_MANY, picker::MANY_LABEL, showing == Mode::Many),
         picker::Row::tab(TO_JUMP, picker::JUMP_LABEL, showing == Mode::Jump),
+        picker::Row::tab(TO_BOARD, picker::BOARD_LABEL, showing == Mode::Board),
     ]
 }
 
@@ -529,12 +532,12 @@ pub fn run_jump(
     cached: &[String],
     pins: &[String],
 ) -> Run {
-    let counts = wm.window_counts();
+    let occupancy = wm.occupancy();
     let here = wm.focused_workspace().unwrap_or_default();
     let known_to_aerospace = wm.all_workspaces().unwrap_or_default();
 
     let menu = picker::build_menu(
-        counts.as_ref(),
+        occupancy.as_ref(),
         &cfg.known,
         &[cached, &known_to_aerospace].concat(),
         &here,
@@ -545,12 +548,12 @@ pub fn run_jump(
     let mut rows = tabs(Mode::Jump);
     rows.extend(menu.rows.clone());
 
-    let done = |outcome| Run { window: None, counts: counts.clone(), outcome, brought: Vec::new() };
+    let done = |outcome| Run { window: None, occupancy: occupancy.clone(), outcome, brought: Vec::new() };
 
     let Some(choice) = prompt.choose_rows(&rows, "Jump to a task", "") else {
         return done(Outcome::Cancelled);
     };
-    if choice == TO_ONE || choice == TO_MANY {
+    if choice != TO_JUMP && picker::is_mode(&choice) {
         return done(Outcome::SwitchMode { to: choice });
     }
     if let Some(workspace) = choice.strip_prefix(picker::PIN) {
@@ -571,6 +574,128 @@ pub fn run_jump(
 pub enum Session {
     Single(Run),
     Batch(Batch),
+}
+
+/// Every window on the machine, grouped by the task it is in.
+///
+/// macOS groups Mission Control by its own Spaces, which have nothing to do
+/// with these: AeroSpace hides a workspace by parking its windows off screen
+/// *within* a Space, so Ctrl-↑ shows all of them at once, ungrouped and
+/// unlabelled. This draws the same picture from the grouping that was meant.
+///
+/// Unlike every other mode this one can be answered more than once. A tidy-up
+/// is several windows going to several different places, and closing the panel
+/// after each would make sorting forty windows forty keypresses — so the drags
+/// are collected by the panel and applied together here.
+pub fn run_board(
+    wm: &dyn WindowManager,
+    prompt: &dyn Prompt,
+    cfg: &Config,
+    cached: &[String],
+    follow: Following<'_>,
+) -> Session {
+    let here = wm.focused_workspace().unwrap_or_default();
+    let Some(all) = wm.all_windows() else {
+        return Session::Single(Run {
+            window: None,
+            occupancy: None,
+            outcome: Outcome::NoWindow,
+            brought: Vec::new(),
+        });
+    };
+    let windows: Vec<Window> = all.into_iter().filter(|w| w.app != DIALOG_APP).collect();
+    let occupancy = picker::occupancy_of(&windows);
+
+    let menu = picker::build_window_menu(&windows, &here, |w| follow.has(w));
+    let mut rows = tabs(Mode::Board);
+    rows.extend(menu.rows.clone());
+
+    // Tasks holding nothing still get a tile, so the board can tidy *into* one
+    // that is waiting empty rather than only shuffle between the ones already
+    // in use.
+    let mut empty: Vec<String> = wm
+        .all_workspaces()
+        .unwrap_or_default()
+        .into_iter()
+        .chain(cfg.known.iter().cloned())
+        .chain(cached.iter().cloned())
+        .filter(|name| !name.is_empty() && !occupancy.contains_key(name))
+        .collect();
+    empty.sort();
+    empty.dedup();
+    for name in &empty {
+        rows.push(picker::Row::space(name));
+    }
+
+    let single = |outcome| {
+        Session::Single(Run {
+            window: None,
+            occupancy: Some(occupancy.clone()),
+            outcome,
+            brought: Vec::new(),
+        })
+    };
+
+    let Some(answer) = prompt.choose_board(&rows, "Every window", &here) else {
+        return single(Outcome::Cancelled);
+    };
+    if let Some(tab) = answer.iter().find(|a| *a != TO_BOARD && picker::is_mode(a)) {
+        return single(Outcome::SwitchMode { to: tab.clone() });
+    }
+
+    // Windows dragged onto tasks, applied together. Each is recorded exactly
+    // as a sling is, so tidying on the board feeds `restore` the same
+    // statement of intent that slinging by hand does.
+    let drags: Vec<(&str, &str)> = answer.iter().filter_map(|a| picker::sling_parts(a)).collect();
+    if !drags.is_empty() {
+        let mut results = Vec::new();
+        for (window_id, target) in drags {
+            let Some(window) = windows.iter().find(|w| w.id == window_id) else {
+                continue;
+            };
+            let outcome = if window.workspace == target {
+                Outcome::SameWorkspace
+            } else if !wm.move_window(&window.id, target) {
+                Outcome::MoveFailed { to: target.to_string() }
+            } else {
+                Outcome::Moved { to: target.to_string(), created: !occupancy.contains_key(target) }
+            };
+            results.push((window.clone(), outcome));
+        }
+        // No `follow_to`: a drag moves a window without moving *you*, so there
+        // is no arrival for the windows that travel everywhere to catch up to.
+        return Session::Batch(Batch { target: None, results, aborted: None });
+    }
+
+    let Some(choice) = answer.into_iter().next() else {
+        return single(Outcome::Cancelled);
+    };
+
+    // A window: go to it. Focusing one that is off screen brings its whole
+    // task forward, which is the point — you picked the window, not the task.
+    if let Some(window) = windows.iter().find(|w| w.id == choice) {
+        if !wm.focus(&window.id) {
+            return single(Outcome::RefocusFailed);
+        }
+        return Session::Single(Run {
+            window: Some(window.clone()),
+            occupancy: Some(occupancy.clone()),
+            outcome: Outcome::Focused { to: window.workspace.clone() },
+            brought: Vec::new(),
+        });
+    }
+
+    // A tile heading: go to the task itself, whether or not it holds anything.
+    if occupancy.contains_key(&choice) || empty.contains(&choice) {
+        if choice == here {
+            return single(Outcome::SameWorkspace);
+        }
+        if !wm.focus_workspace(&choice) {
+            return single(Outcome::MoveFailed { to: choice });
+        }
+        return single(Outcome::Jumped { to: choice });
+    }
+    single(Outcome::Heading)
 }
 
 /// One keypress, either mode. The dialog carries a row that switches between
@@ -603,6 +728,7 @@ pub fn run_session_from(
         let switched = |to: &str| match to {
             TO_MANY => Mode::Many,
             TO_JUMP => Mode::Jump,
+            TO_BOARD => Mode::Board,
             _ => Mode::One,
         };
         match mode {
@@ -630,11 +756,31 @@ pub fn run_session_from(
                 }
                 return Session::Batch(batch);
             }
+            Mode::Board => {
+                let session = run_board(wm, prompt, cfg, cached, follow);
+                // The board is the one mode that can answer with either shape,
+                // so the tab it was left by has to be looked for in both.
+                let leaving = match &session {
+                    Session::Single(run) => match &run.outcome {
+                        Outcome::SwitchMode { to } => Some(to.clone()),
+                        _ => None,
+                    },
+                    Session::Batch(batch) => match &batch.aborted {
+                        Some(Outcome::SwitchMode { to }) => Some(to.clone()),
+                        _ => None,
+                    },
+                };
+                if let Some(to) = leaving {
+                    mode = switched(&to);
+                    continue;
+                }
+                return session;
+            }
         }
     }
     Session::Single(Run {
         window: None,
-        counts: None,
+        occupancy: None,
         outcome: Outcome::Cancelled,
         brought: Vec::new(),
     })

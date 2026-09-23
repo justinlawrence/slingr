@@ -26,7 +26,22 @@ Two pieces answer this, and they are separate:
 - A **worktree is an attribute of a task**, not the other way round.
 - One **workspace per task**, one **Brave window per task**.
 - Brave is the user; Chrome is for MCP agents.
-- A window belongs to exactly one task. AeroSpace has no sticky windows — the
+- A window belongs to exactly one task. They follow you on **arrival**, never on a sling.
+
+Slinging a window does not move you, so sending the followers after it took
+the terminal, the chat and the mail out of the workspace you were still
+sitting in — and if that window was the last one there, macOS then handed
+focus to something at random and carried you off with it. Observed exactly
+that way: slinging a Chrome window out of `t-video` emptied `t-video`, and the
+report was "it sent me to an empty space, which didn't even include my herdr
+ghostty window".
+
+So a sling moves one window, and the followers stay put. They catch up by
+themselves the moment you actually go somewhere, because that is what
+`exec-on-workspace-change` fires on — no extra call, and the same path whether
+you arrived by keybinding, by the menu bar, or by clicking a window.
+
+AeroSpace has no sticky windows — the
   string does not appear anywhere in its binary — so this is a constraint
   rather than a decision.
 - Except for the few that belong to none of them: herdr, WhatsApp. Those are
@@ -130,6 +145,35 @@ Empty tasks are listed and can be jumped to — going somewhere to start work is
 exactly when a task is empty. That is different from the automatic
 herdr-driven switch, which still refuses an empty workspace, because nobody
 asked for that one.
+
+## The board
+
+The fourth tab is the whole machine at once: every window, grouped by the task
+it is in, as tiles you can drag between. `ctrl-alt-cmd-b` opens it.
+
+It exists because macOS will not draw this picture. Ctrl-↑ groups by macOS
+Spaces, which have nothing to do with AeroSpace workspaces — see
+`docs/FINDINGS.md` — so it shows every window at once, ungrouped and
+unlabelled, which is precisely the view that made a task-oriented picker
+necessary in the first place. slingr already knows the grouping that was meant,
+so it can simply draw it.
+
+It is the one mode that can be answered more than once. Tidying is a dozen
+moves, and a panel that closed after each would turn sorting forty windows into
+forty keypresses — so drags accumulate, the tiles update as you go, and nothing
+is slung until you confirm. Escape puts them all back before it closes the
+board, because losing a tidy-up to a stray keypress is the worse mistake.
+
+Every move it makes is recorded exactly as a sling is, so `restore` reads a
+board tidy-up as the same statement of intent as slinging by hand.
+
+Tasks holding nothing still get a tile. Without them the board could only
+shuffle windows between the tasks already in use, never tidy into one that is
+waiting empty — and an empty task is usually the one you are sorting *towards*.
+
+While nothing is waiting to move, clicking a window goes to it and clicking a
+tile's name goes to that task. Once anything is pending the board stops
+offering to leave, since one stray click would throw the work away.
 
 ## Two screens
 
@@ -349,9 +393,10 @@ ctrl-alt-cmd-n = 'list-workspaces --monitor focused --empty no | workspace --std
   the panel; a panel can show the new state instead, which a dialog never
   could.
 - **Window previews.** `CGWindowListCreateImage` would let you recognise a
-  window rather than parse its title.
-- **Drag** — to reorder pins, or a window onto a task. The original metaphor,
-  finally literal.
+  window rather than parse its title. The application icon now carries most of
+  that on task rows; a preview would carry the rest on the board.
+- **Drag to reorder pins.** Dragging a window onto a task is built — that is
+  the board — but the pinned tasks are still ordered by when they were pinned.
 - **An inline rename field**, so `＋ new workspace` stops bouncing out to an
   AppleScript text dialog — the last piece of the old UI still in the flow.
 - **Routing rules** — Chrome to `agents`, the `work@example.com` profile to

@@ -37,6 +37,20 @@ pub trait Prompt {
         Some(chosen.iter().filter_map(|c| crate::picker::row_id_for(rows, c)).collect())
     }
 
+    /// The board: every window at once, where the answer may be several
+    /// windows dragged onto several different tasks.
+    ///
+    /// A front end that cannot draw a board can still show the same rows as a
+    /// list, and one chosen window is a valid answer there.
+    fn choose_board(
+        &self,
+        rows: &[crate::picker::Row],
+        title: &str,
+        subtitle: &str,
+    ) -> Option<Vec<String>> {
+        self.choose_rows(rows, title, subtitle).map(|one| vec![one])
+    }
+
     /// Several lines at once. `None` when cancelled or nothing was selected.
     fn choose_many(&self, items: &[String], title: &str, prompt: &str) -> Option<Vec<String>>;
     fn ask_text(&self, title: &str, prompt: &str) -> Option<String>;

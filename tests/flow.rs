@@ -9,7 +9,9 @@ use slingr::config::{Config, Order};
 use slingr::dialog::Prompt;
 use slingr::app::Session;
 use slingr::app::Following;
-use slingr::picker::{Row, Window, ALL, ALL_APP, NEW, TO_MANY, TO_ONE};
+use slingr::picker::{
+    Occupancy, Row, Window, ALL, ALL_APP, MODES, NEW, TO_BOARD, TO_JUMP, TO_MANY, TO_ONE,
+};
 
 /// Only these windows follow, nothing app-wide.
 fn following(ids: &[&str]) -> Vec<String> {
@@ -27,7 +29,7 @@ enum Call {
 struct FakeWm {
     window: Option<Window>,
     all: Vec<Window>,
-    counts: Option<BTreeMap<String, usize>>,
+    occupancy: Option<BTreeMap<String, Occupancy>>,
     focus_succeeds: bool,
     /// Window ids that refuse to take focus, however hard you ask — a
     /// minimised window behaves exactly like this.
@@ -64,9 +66,9 @@ impl FakeWm {
                 window("7686", "infra", "The Framing Queue"),
                 window("19369", "t-mail", "task-title-change"),
             ],
-            counts: Some(BTreeMap::from([
-                ("infra".to_string(), 3usize),
-                ("ac-app".to_string(), 2usize),
+            occupancy: Some(BTreeMap::from([
+                ("infra".to_string(), Occupancy { count: 3, stack: vec!["com.brave.Browser".into()] }),
+                ("ac-app".to_string(), Occupancy { count: 2, stack: vec!["com.brave.Browser".into()] }),
             ])),
             focus_succeeds: true,
             focus_refuses: Vec::new(),
@@ -80,8 +82,8 @@ impl WindowManager for FakeWm {
     fn focused_window(&self) -> Option<Window> {
         self.window.clone()
     }
-    fn window_counts(&self) -> Option<BTreeMap<String, usize>> {
-        self.counts.clone()
+    fn occupancy(&self) -> Option<BTreeMap<String, Occupancy>> {
+        self.occupancy.clone()
     }
     fn all_windows(&self) -> Option<Vec<Window>> {
         Some(self.all.clone())
@@ -104,7 +106,7 @@ impl WindowManager for FakeWm {
         self.window.as_ref().map(|w| w.workspace.clone())
     }
     fn all_workspaces(&self) -> Option<Vec<String>> {
-        self.counts.as_ref().map(|c| c.keys().cloned().collect())
+        self.occupancy.as_ref().map(|c| c.keys().cloned().collect())
     }
     fn move_window(&self, window_id: &str, workspace: &str) -> bool {
         self.calls.borrow_mut().push(Call::MoveById(window_id.into(), workspace.into()));
@@ -339,12 +341,12 @@ fn a_silent_aerospace_still_gives_a_usable_menu() {
     // Workspaces remembered from previous runs keep the menu populated, and
     // "created" stays false because we cannot know what is live.
     let mut wm = FakeWm::new();
-    wm.counts = None;
+    wm.occupancy = None;
     let cached = vec!["ac-shopify".into()];
     let run = app::run(&wm, &FakePrompt::picking("ac-shopify"), &config(), &cached, Following { windows: &[], apps: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "ac-shopify".into(), created: false });
-    assert!(run.counts.is_none());
+    assert!(run.occupancy.is_none());
 }
 
 // --- selecting several windows at once -------------------------------------
@@ -511,8 +513,17 @@ fn every_mode_is_offered_as_a_tab_with_the_showing_one_marked() {
     let with_tabs: Vec<&Vec<(String, bool)>> = seen.iter().filter(|t| !t.is_empty()).collect();
     assert_eq!(with_tabs.len(), 2, "one tab strip per mode chooser");
 
+    // Named rather than counted, so adding a mode fails here only if the new
+    // one is missing from a strip — not merely because there is one more.
+    let every_mode = [TO_ONE, TO_MANY, TO_JUMP, TO_BOARD];
     for tabs in &with_tabs {
-        assert_eq!(tabs.len(), 3, "every mode should always be offered");
+        for mode in every_mode {
+            assert!(
+                tabs.iter().any(|(id, _)| id == mode),
+                "every mode should always be offered, missing {mode}"
+            );
+        }
+        assert_eq!(tabs.len(), every_mode.len(), "no tab beyond the modes");
         assert_eq!(tabs.iter().filter(|(_, active)| *active).count(), 1);
     }
     assert!(with_tabs[0].iter().any(|(id, active)| id == TO_ONE && *active));
@@ -609,37 +620,79 @@ fn picking_it_again_takes_the_window_off_the_list() {
 }
 
 #[test]
-fn a_follower_is_brought_along() {
+fn a_sling_leaves_your_followers_where_you_are() {
+    // Slinging does not move *you*, so sending the followers after the window
+    // emptied the workspace you were sitting in — terminal and all. Observed:
+    // slinging a Chrome window out of t-video took the Ghostty with it and
+    // left the user looking at nothing.
     let wm = FakeWm::new();
     let following = vec!["7695".to_string()];
     let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "t-forms".into(), created: true });
-    assert_eq!(run.brought.len(), 1);
-    assert_eq!(run.brought[0].0.id, "7695");
-
-    // No focus anywhere, so nothing to hand back.
+    assert!(run.brought.is_empty(), "a sling brings nothing along");
     assert_eq!(
         *wm.calls.borrow(),
-        vec![
-            Call::MoveById("11513".into(), "t-forms".into()),
-            Call::MoveById("7695".into(), "t-forms".into()),
-        ]
+        vec![Call::MoveById("11513".into(), "t-forms".into())],
+        "only the window that was picked should move"
     );
 }
 
 #[test]
+fn slinging_many_also_leaves_your_followers_alone() {
+    let wm = FakeWm::new();
+    let following = vec!["19369".to_string()];
+    let batch = app::run_many(
+        &wm,
+        &FakePrompt::selecting(&[1], "t-forms"),
+        &config(),
+        &[],
+        Following { windows: &following, apps: &[] },
+        &[],
+    );
+    assert!(
+        !batch.results.iter().any(|(w, _)| w.id == "19369"),
+        "the follower should not have been swept along with the batch"
+    );
+}
+
+#[test]
+fn arriving_somewhere_is_what_brings_your_followers() {
+    // The other half of the rule: they catch up the moment you actually go
+    // somewhere, which is what the `follow` hook fires on.
+    let wm = FakeWm::new();
+    let following = vec!["7695".to_string()];
+    let brought = app::follow_to(
+        &wm,
+        Following { windows: &following, apps: &[] },
+        "t-forms",
+        "",
+        None,
+        None,
+    );
+    assert_eq!(brought.len(), 1);
+    assert_eq!(brought[0].0.id, "7695");
+    assert_eq!(brought[0].1, Outcome::Moved { to: "t-forms".into(), created: false });
+    assert_eq!(*wm.calls.borrow(), vec![Call::MoveById("7695".into(), "t-forms".into())]);
+}
+
+#[test]
 fn a_follower_comes_from_any_workspace() {
-    // 19369 lives in t-mail, nowhere near the window being slung. Fetching it
+    // 19369 lives in t-mail, nowhere near where you are arriving. Fetching it
     // used to mean focusing it, which restored all of t-mail first; naming it
     // costs nothing, so distance no longer matters.
     let wm = FakeWm::new();
     let following = vec!["19369".to_string()];
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
-
-    assert_eq!(run.outcome, Outcome::Moved { to: "t-forms".into(), created: true });
-    assert_eq!(run.brought.len(), 1);
-    assert_eq!(run.brought[0].0.id, "19369");
+    let brought = app::follow_to(
+        &wm,
+        Following { windows: &following, apps: &[] },
+        "t-forms",
+        "",
+        None,
+        None,
+    );
+    assert_eq!(brought.len(), 1);
+    assert_eq!(brought[0].0.id, "19369");
 }
 
 #[test]
@@ -654,15 +707,25 @@ fn a_follower_already_in_the_target_is_not_moved() {
 }
 
 #[test]
-fn an_unreachable_follower_does_not_break_the_sling() {
+fn an_unreachable_follower_does_not_break_the_arrival() {
     let mut wm = FakeWm::new();
     wm.focus_refuses = vec!["7695".into()];
-    let following = vec!["7695".to_string()];
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
+    let following = vec!["7695".to_string(), "19369".to_string()];
+    let brought = app::follow_to(
+        &wm,
+        Following { windows: &following, apps: &[] },
+        "t-forms",
+        "",
+        None,
+        None,
+    );
 
-    // The window the user asked about still moved.
-    assert_eq!(run.outcome, Outcome::Moved { to: "t-forms".into(), created: true });
-    assert_eq!(run.brought[0].1, Outcome::MoveFailed { to: "t-forms".into() });
+    // One refusing to move must not stop the rest arriving, and the failure is
+    // reported rather than passed off as a move.
+    let failed = brought.iter().find(|(w, _)| w.id == "7695").expect("reported");
+    assert_eq!(failed.1, Outcome::MoveFailed { to: "t-forms".into() });
+    let moved = brought.iter().find(|(w, _)| w.id == "19369").expect("the other one still came");
+    assert_eq!(moved.1, Outcome::Moved { to: "t-forms".into(), created: false });
 }
 
 #[test]
@@ -825,10 +888,17 @@ fn a_follower_on_another_screen_is_left_alone() {
     wm.all.push(window_on("42", "2", "tytoctl", "2"));
 
     let following = vec!["7695".to_string(), "42".to_string()];
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
+    let brought = app::follow_to(
+        &wm,
+        Following { windows: &following, apps: &[] },
+        "t-forms",
+        "",
+        None,
+        Some("1"),
+    );
 
-    let brought: Vec<&str> = run.brought.iter().map(|(w, _)| w.id.as_str()).collect();
-    assert_eq!(brought, vec!["7695"], "only the follower sharing this screen should move");
+    let ids: Vec<&str> = brought.iter().map(|(w, _)| w.id.as_str()).collect();
+    assert_eq!(ids, vec!["7695"], "only the follower sharing this screen should move");
 }
 
 
@@ -878,10 +948,10 @@ fn following_an_application_covers_windows_it_has_not_opened_yet() {
     wm.all.push(later);
 
     let follow = Following { windows: &[], apps: &["com.apple.finder".to_string()] };
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], follow, &[]);
+    let brought = app::follow_to(&wm, follow, "t-forms", "", None, None);
 
-    assert_eq!(run.brought.len(), 1, "the Finder window should come along");
-    assert_eq!(run.brought[0].0.id, "999");
+    assert_eq!(brought.len(), 1, "the Finder window should come along");
+    assert_eq!(brought[0].0.id, "999");
 }
 
 #[test]
@@ -959,4 +1029,248 @@ fn a_typed_name_takes_the_whole_batch() {
 
     assert_eq!(batch.target.as_deref(), Some("w-new-thing"));
     assert_eq!(batch.moved(), 2);
+}
+
+// ---------------------------------------------------------------- the board
+
+/// Answers the board with exactly what it is handed, and keeps the rows it was
+/// offered so a test can assert what the board drew as well as what it did.
+struct BoardAnswer {
+    answer: Vec<String>,
+    saw: RefCell<Vec<Row>>,
+}
+
+impl BoardAnswer {
+    fn new(answer: &[&str]) -> Self {
+        Self {
+            answer: answer.iter().map(|s| s.to_string()).collect(),
+            saw: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn drew(&self) -> Vec<Row> {
+        self.saw.borrow().clone()
+    }
+}
+
+impl Prompt for BoardAnswer {
+    fn choose_board(&self, rows: &[Row], _t: &str, _s: &str) -> Option<Vec<String>> {
+        *self.saw.borrow_mut() = rows.to_vec();
+        (!self.answer.is_empty()).then(|| self.answer.clone())
+    }
+    fn choose(&self, _: &[String], _: &str, _: &str) -> Option<String> {
+        None
+    }
+    fn choose_many(&self, _: &[String], _: &str, _: &str) -> Option<Vec<String>> {
+        None
+    }
+    fn ask_text(&self, _: &str, _: &str) -> Option<String> {
+        None
+    }
+}
+
+fn sling_to(window: &str, workspace: &str) -> String {
+    format!("{}{window}:{workspace}", slingr::picker::SLING)
+}
+
+fn board(wm: &FakeWm, prompt: &BoardAnswer) -> Session {
+    app::run_board(wm, prompt, &config(), &[], Following { windows: &[], apps: &[] })
+}
+
+#[test]
+fn a_drag_moves_the_window_it_names_and_not_the_focused_one() {
+    let wm = FakeWm::new();
+    // 11513 has focus; 7695 is what was dragged. Moving whatever happened to
+    // be focused is the oldest bug in this project, and the board reintroduces
+    // every condition for it.
+    let prompt = BoardAnswer::new(&[&sling_to("7695", "t-forms")]);
+    match board(&wm, &prompt) {
+        Session::Batch(batch) => {
+            assert_eq!(batch.results.len(), 1);
+            assert_eq!(batch.results[0].0.id, "7695");
+            assert_eq!(batch.results[0].1, Outcome::Moved { to: "t-forms".into(), created: true });
+            assert_eq!(*wm.calls.borrow(), vec![Call::MoveById("7695".into(), "t-forms".into())]);
+        }
+        Session::Single(_) => panic!("a drag is a batch"),
+    }
+}
+
+#[test]
+fn one_visit_to_the_board_can_send_windows_to_several_different_tasks() {
+    let wm = FakeWm::new();
+    let prompt = BoardAnswer::new(&[
+        &sling_to("7695", "t-forms"),
+        &sling_to("7686", "ac-app"),
+        &sling_to("19369", "t-forms"),
+    ]);
+    match board(&wm, &prompt) {
+        Session::Batch(batch) => {
+            assert_eq!(batch.moved(), 3);
+            // No single destination, because there was not one.
+            assert_eq!(batch.target, None);
+            assert_eq!(
+                *wm.calls.borrow(),
+                vec![
+                    Call::MoveById("7695".into(), "t-forms".into()),
+                    Call::MoveById("7686".into(), "ac-app".into()),
+                    Call::MoveById("19369".into(), "t-forms".into()),
+                ]
+            );
+        }
+        Session::Single(_) => panic!("drags are a batch"),
+    }
+}
+
+#[test]
+fn dropping_a_window_back_where_it_started_moves_nothing() {
+    let wm = FakeWm::new();
+    let prompt = BoardAnswer::new(&[&sling_to("7695", "infra")]);
+    match board(&wm, &prompt) {
+        Session::Batch(batch) => {
+            assert_eq!(batch.results[0].1, Outcome::SameWorkspace);
+            assert!(wm.calls.borrow().is_empty(), "nothing should have been asked of AeroSpace");
+        }
+        Session::Single(_) => panic!("a drag is a batch"),
+    }
+}
+
+#[test]
+fn picking_a_window_goes_to_it() {
+    let wm = FakeWm::new();
+    let prompt = BoardAnswer::new(&["19369"]);
+    match board(&wm, &prompt) {
+        Session::Single(run) => {
+            assert_eq!(run.outcome, Outcome::Focused { to: "t-mail".into() });
+            assert_eq!(run.window.map(|w| w.id), Some("19369".into()));
+            assert_eq!(*wm.calls.borrow(), vec![Call::Focus("19369".into())]);
+        }
+        Session::Batch(_) => panic!("going to a window moves nothing"),
+    }
+}
+
+#[test]
+fn picking_a_task_goes_there_without_moving_anything() {
+    let wm = FakeWm::new();
+    let prompt = BoardAnswer::new(&["ac-app"]);
+    match board(&wm, &prompt) {
+        Session::Single(run) => {
+            assert_eq!(run.outcome, Outcome::Jumped { to: "ac-app".into() });
+            assert!(!wm.calls.borrow().iter().any(|c| matches!(c, Call::MoveById(..))));
+        }
+        Session::Batch(_) => panic!("jumping moves nothing"),
+    }
+}
+
+#[test]
+fn a_task_holding_nothing_still_gets_somewhere_to_drop() {
+    let mut wm = FakeWm::new();
+    // Known to AeroSpace, holding no windows — exactly the task you want to
+    // tidy into.
+    wm.occupancy = Some(BTreeMap::from([
+        ("infra".to_string(), Occupancy { count: 4, stack: vec!["com.brave.Browser".into()] }),
+        ("t-empty".to_string(), Occupancy { count: 0, stack: Vec::new() }),
+    ]));
+    let prompt = BoardAnswer::new(&[&sling_to("7695", "t-empty")]);
+    match board(&wm, &prompt) {
+        Session::Batch(batch) => {
+            assert_eq!(batch.results[0].1, Outcome::Moved { to: "t-empty".into(), created: true });
+        }
+        Session::Single(_) => panic!("a drag is a batch"),
+    }
+    assert!(
+        prompt.drew().iter().any(|r| r.id == "t-empty" && r.marker.as_deref() == Some("space")),
+        "an empty task needs a tile, or it can never be tidied into"
+    );
+}
+
+#[test]
+fn the_board_never_offers_its_own_tab_as_somewhere_to_go() {
+    let wm = FakeWm::new();
+    let prompt = BoardAnswer::new(&[]);
+    let _ = board(&wm, &prompt);
+    let tabs: Vec<String> = prompt
+        .drew()
+        .iter()
+        .filter(|r| r.marker.as_deref() == Some("tab"))
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(tabs, vec![TO_ONE, TO_MANY, TO_JUMP, TO_BOARD]);
+    let showing: Vec<String> = prompt
+        .drew()
+        .iter()
+        .filter(|r| r.marker.as_deref() == Some("tab") && r.active)
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(showing, vec![TO_BOARD]);
+}
+
+/// Answers whatever it is asked with one named row, so a tab can be picked at
+/// whichever step of whichever mode offers it.
+struct PicksTab(String);
+
+impl Prompt for PicksTab {
+    fn choose_rows(&self, rows: &[Row], _t: &str, _s: &str) -> Option<String> {
+        rows.iter().find(|r| r.id == self.0).map(|r| r.id.clone())
+    }
+    fn choose_many_rows(&self, rows: &[Row], _t: &str, _s: &str) -> Option<Vec<String>> {
+        rows.iter().find(|r| r.id == self.0).map(|r| vec![r.id.clone()])
+    }
+    fn choose_board(&self, rows: &[Row], _t: &str, _s: &str) -> Option<Vec<String>> {
+        rows.iter().find(|r| r.id == self.0).map(|r| vec![r.id.clone()])
+    }
+    fn choose(&self, _: &[String], _: &str, _: &str) -> Option<String> {
+        None
+    }
+    fn choose_many(&self, _: &[String], _: &str, _: &str) -> Option<Vec<String>> {
+        None
+    }
+    fn ask_text(&self, _: &str, _: &str) -> Option<String> {
+        None
+    }
+}
+
+#[test]
+fn every_tab_switches_mode_rather_than_being_taken_for_a_task() {
+    // This is the shape of a real bug: the board was added to the tab strip
+    // and to none of the three checks that recognise a tab, so clicking it
+    // asked AeroSpace to sling the window into a workspace called
+    // "__board__". Adding a fifth mode must fail here, not in the action log.
+    let cfg = config();
+    let nothing_follows = || Following { windows: &[], apps: &[] };
+
+    for tab in MODES.iter().filter(|t| **t != TO_ONE) {
+        let wm = FakeWm::new();
+        let run = app::run(&wm, &PicksTab(tab.to_string()), &cfg, &[], nothing_follows(), &[]);
+        assert_eq!(run.outcome, Outcome::SwitchMode { to: tab.to_string() }, "sling once -> {tab}");
+        assert!(wm.calls.borrow().is_empty(), "changing tab moved something ({tab})");
+    }
+
+    for tab in MODES.iter().filter(|t| **t != TO_JUMP) {
+        let wm = FakeWm::new();
+        let run = app::run_jump(&wm, &PicksTab(tab.to_string()), &cfg, &[], &[]);
+        assert_eq!(run.outcome, Outcome::SwitchMode { to: tab.to_string() }, "jump to -> {tab}");
+        assert!(wm.calls.borrow().is_empty(), "changing tab moved something ({tab})");
+    }
+
+    for tab in MODES.iter().filter(|t| **t != TO_MANY) {
+        let wm = FakeWm::new();
+        let batch = app::run_many(&wm, &PicksTab(tab.to_string()), &cfg, &[], nothing_follows(), &[]);
+        assert_eq!(
+            batch.aborted,
+            Some(Outcome::SwitchMode { to: tab.to_string() }),
+            "sling many -> {tab}"
+        );
+        assert!(wm.calls.borrow().is_empty(), "changing tab moved something ({tab})");
+    }
+
+    for tab in MODES.iter().filter(|t| **t != TO_BOARD) {
+        let wm = FakeWm::new();
+        match app::run_board(&wm, &PicksTab(tab.to_string()), &cfg, &[], nothing_follows()) {
+            Session::Single(run) => {
+                assert_eq!(run.outcome, Outcome::SwitchMode { to: tab.to_string() }, "board -> {tab}");
+            }
+            Session::Batch(_) => panic!("changing tab is not a batch ({tab})"),
+        }
+        assert!(wm.calls.borrow().is_empty(), "changing tab moved something ({tab})");
+    }
 }

@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::picker::{parse_window, Window};
+use crate::picker::{occupancy_from, parse_window, Occupancy, Window};
 
 pub const BIN: &str = "/opt/homebrew/bin/aerospace";
 /// Generous on purpose. A wedged server never answers, so waiting longer costs
@@ -27,9 +27,10 @@ pub trait WindowManager {
     fn focused_window(&self) -> Option<Window>;
     /// Every window AeroSpace manages, across all workspaces.
     fn all_windows(&self) -> Option<Vec<Window>>;
-    /// How many windows each workspace holds; `None` if the query failed.
-    /// Workspaces holding nothing are absent rather than zero.
-    fn window_counts(&self) -> Option<BTreeMap<String, usize>>;
+    /// What each workspace holds — how many windows, and which applications
+    /// they belong to; `None` if the query failed. Workspaces holding nothing
+    /// are absent rather than zero.
+    fn occupancy(&self) -> Option<BTreeMap<String, Occupancy>>;
     /// Focus a window by id, returning whether it actually took.
     fn focus(&self, window_id: &str) -> bool;
     fn move_focused_to(&self, workspace: &str) -> bool;
@@ -148,16 +149,22 @@ impl WindowManager for AeroSpace {
     /// reports whichever workspace is active on each monitor even when it is
     /// empty. Counting an empty workspace as occupied would be a lie, and this
     /// costs the same one query.
-    fn window_counts(&self) -> Option<BTreeMap<String, usize>> {
-        let out = self.run(&["list-windows", "--all", "--format", "%{workspace}"])?;
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        for line in out.lines() {
-            let name = line.trim();
-            if !name.is_empty() {
-                *counts.entry(name.to_string()).or_default() += 1;
-            }
-        }
-        Some(counts)
+    fn occupancy(&self) -> Option<BTreeMap<String, Occupancy>> {
+        // Two fields where there was one, but still a single call: the icon
+        // stack costs nothing extra at the AeroSpace end, and this query is on
+        // the path of every sling.
+        let out =
+            self.run(&["list-windows", "--all", "--format", "%{workspace}|%{app-bundle-id}"])?;
+        let pairs: Vec<(&str, &str)> = out
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let (workspace, bundle) = line.split_once('|').unwrap_or((line, ""));
+                (workspace.trim(), bundle.trim())
+            })
+            .collect();
+        Some(occupancy_from(pairs.into_iter()))
     }
 
     /// `focus --window-id` exits 0 even when it fails — a minimised window

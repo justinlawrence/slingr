@@ -1,38 +1,35 @@
-# sling
+# slingr
 
 Throw a window at a task.
 
 A workspace picker for [AeroSpace](https://nikitabobko.github.io/AeroSpace/).
 Press one key, pick a task, and the focused window moves there.
 
-```
-＋  new workspace…
-──────  work  ──────
-✓  t-forms
-   t-pair
-──────  side project  ──────
-●  ac-app  (this window is here)
-```
-
-`✓` already holds windows · `●` where this window is now · unmarked, a known
-task with nothing in it yet.
+Tasks are listed with the icons of the applications they hold, rarest first —
+so a task with an editor and a spreadsheet in it reads as one before you have
+read its name, rather than as another row of browsers.
 
 ## Install
 
 ```sh
-cargo build --release
-ln -sf ~/Dev/slingr/target/release/sling ~/.local/bin/slingr
+./install.sh
 ```
+
+That builds both halves — `cargo build --release` for the binary and `swiftc`
+for the panel — links `~/.local/bin/slingr`, and writes the herdr plugin with
+the absolute path it needs.
 
 Bind it in `~/.aerospace.toml`:
 
 ```toml
 ctrl-alt-cmd-s = 'exec-and-forget /Users/justin/.local/bin/slingr'
 ctrl-alt-cmd-i = 'exec-and-forget /Users/justin/.local/bin/slingr jump'
+ctrl-alt-cmd-b = 'exec-and-forget /Users/justin/.local/bin/slingr board'
 ```
 
-macOS will ask once to let AeroSpace control System Events. That grant is what
-draws the dialog; without it nothing appears.
+`cargo build` alone does not build the panel. Without it slingr falls back to
+an AppleScript dialog, and macOS then asks once to let AeroSpace control System
+Events — `slingr paths` says which of the two you are getting.
 
 ## Use
 
@@ -40,6 +37,7 @@ draws the dialog; without it nothing appears.
 |---|---|
 | `slingr` | the picker |
 | `slingr jump` | the picker, opened on the task list — go somewhere |
+| `slingr board` | every window at once, grouped by task, drag to move them |
 | `slingr sync` | teach AeroSpace every task, so empty ones persist |
 | `slingr snapshot` | record where every window is |
 | `slingr restore` | put them back after an AeroSpace restart |
@@ -50,24 +48,25 @@ draws the dialog; without it nothing appears.
 | `slingr probe` | ask AeroSpace what it sees, changing nothing |
 | `slingr paths` | the files sling reads and writes |
 
-One key, two modes. The dialog opens on the focused window, and its first line
-switches to selecting several:
+One key, four tabs. The panel opens on the focused window; ⇥ cycles.
 
-```
-⇄  several windows…          <- switches the list
-＋  new workspace…
-──────  work  ──────
-✓  t-forms
-```
+| tab | question |
+|---|---|
+| **sling once** | where does *this* window go? |
+| **sling many** | which windows belong together, and where? |
+| **jump to** | take me to a task |
+| **board** | show me everything, and let me sort it |
 
-Pick `⇄` and the list becomes every window, grouped by workspace with the
-crowded one first. Select as many as you like with shift- or cmd-click, then
-choose where they go; its own first line switches back. This is how a workspace
+**sling many** lists every window grouped by workspace, crowded one first.
+Select as many as you like, then choose where they go — this is how a workspace
 that has collected dozens of windows gets drained. Windows sharing a title show
 their id so you can tell them apart.
 
-`choose from list` is a flat, single-column AppleScript control with no tab
-support, so the mode row is a line you pick rather than a tab you click.
+**board** is the whole machine as tiles, one per task, with windows dragged
+between them. Nothing moves until you confirm, so a tidy-up is one visit rather
+than one visit per window; escape puts everything back before it closes. It
+exists because Ctrl-↑ groups by macOS Spaces, which have nothing to do with
+AeroSpace workspaces — see `docs/FINDINGS.md`.
 
 ## Following herdr
 

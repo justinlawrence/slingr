@@ -21,7 +21,7 @@ is `slingr`.
 ```sh
 ./build.sh      # cargo build --release AND swiftc the panel
 ./install.sh    # the above, plus the symlink and the herdr plugin
-cargo test      # 84 tests, none of which need AeroSpace or a screen
+cargo test      # 111 tests, none of which need AeroSpace or a screen
 ```
 
 `plugin/herdr-plugin.toml` is generated from the `.example` by `install.sh`
@@ -41,7 +41,11 @@ says which it will use.
 - `src/aerospace.rs`, `src/herdr.rs`, `src/dialog.rs`, `src/panel.rs` — the
   impure edges. Each is thin on purpose.
 - `panel/main.swift` — presentation only. Reads rows as JSON on stdin, prints
-  chosen ids. All the thinking stays in Rust.
+  chosen ids. All the thinking stays in Rust. Two surfaces: `PanelView` (the
+  list) and `BoardView` (the tiles), chosen by the request's `layout`. The
+  field spelling between the two languages is pinned by a test in
+  `src/panel.rs` — a renamed field is not a compile error in Swift, it is a
+  value that silently never arrives.
 - `tests/flow.rs` — whole flows against fakes. If a change is about *ordering*
   (what is called before what), assert it here; that is where the worst bug in
   this project lived.
@@ -58,7 +62,8 @@ says which it will use.
 ## Live configuration this depends on
 
 - `~/.aerospace.toml` — `config-version = 2`; keybindings `ctrl-alt-cmd-s`
-  (sling) and `ctrl-alt-cmd-i` (jump); `exec-on-workspace-change` runs
+  (sling), `ctrl-alt-cmd-i` (jump) and `ctrl-alt-cmd-b` (board);
+  `exec-on-workspace-change` runs
   `slingr follow`. The `# slingr:begin` block is written by `slingr sync` — do not
   hand-edit it, and note that a duplicate `persistent-workspaces` key makes
   AeroSpace reject the whole file silently.

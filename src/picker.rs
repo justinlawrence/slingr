@@ -13,9 +13,40 @@ pub const NEW: &str = "＋  new workspace…";
 pub const TO_MANY: &str = "__many__";
 pub const TO_ONE: &str = "__once__";
 pub const TO_JUMP: &str = "__jump__";
+pub const TO_BOARD: &str = "__board__";
 pub const ONCE_LABEL: &str = "sling once";
 pub const MANY_LABEL: &str = "sling many";
 pub const JUMP_LABEL: &str = "jump to";
+pub const BOARD_LABEL: &str = "board";
+
+/// Every mode id, in the order they are drawn.
+///
+/// One list, because the tab strip and the flows that read a chosen tab back
+/// must agree about what a tab *is*. They did not once: the board was added to
+/// the strip and not to the three `choice == TO_…` checks that recognise one,
+/// so clicking it tried to sling the window to a workspace called
+/// `__board__`. A mode is now a question asked of this list.
+pub const MODES: [&str; 4] = [TO_ONE, TO_MANY, TO_JUMP, TO_BOARD];
+
+/// Whether a chosen row names a mode rather than a destination.
+pub fn is_mode(choice: &str) -> bool {
+    MODES.contains(&choice)
+}
+
+/// What the board sends back when a window is dragged onto a task rather than
+/// chosen: `__sling__:<window id>:<task>`.
+///
+/// Dragging is the only answer that names two things at once, and the panel
+/// protocol is one string per line, so both travel in the one string. Neither
+/// half can contain a `:` — window ids are numbers and
+/// `sanitise_workspace` strips everything that is not a word character.
+pub const SLING: &str = "__sling__:";
+
+/// Read a dragged sling back into the window and where it was dropped.
+pub fn sling_parts(choice: &str) -> Option<(&str, &str)> {
+    let (window, workspace) = choice.strip_prefix(SLING)?.split_once(':')?;
+    (!window.is_empty() && !workspace.is_empty()).then_some((window, workspace))
+}
 
 /// Not a workspace — a standing instruction. AeroSpace cannot put one window
 /// in two places, so "everywhere" is emulated by bringing these along each
@@ -98,6 +129,80 @@ pub fn parse_window(line: &str) -> Option<Window> {
         bundle: parts.next().unwrap_or("").trim().to_string(),
         title: parts.next().unwrap_or("").trim().to_string(),
     })
+}
+
+/// How many icons stand in for a workspace on its row. Five is what still
+/// fits beside the name at the largest font scale the panel offers.
+pub const STACK_MAX: usize = 5;
+
+/// What a workspace holds: how many windows, and which applications they
+/// belong to, in the order their icons should be drawn.
+///
+/// The count alone used to be enough. It answers "how full", which is a
+/// weaker question than "what kind of work is in here" — and the second is
+/// the one you are actually asking when you scan the list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Occupancy {
+    pub count: usize,
+    /// Bundle ids, already ordered and capped. The front end draws them as
+    /// given rather than deciding any of this for itself.
+    pub stack: Vec<String>,
+}
+
+/// Group windows by workspace and work out each one's icon stack.
+pub fn occupancy_of(windows: &[Window]) -> BTreeMap<String, Occupancy> {
+    occupancy_from(windows.iter().map(|w| (w.workspace.as_str(), w.bundle.as_str())))
+}
+
+/// The same, from bare `(workspace, bundle)` pairs — which is all AeroSpace
+/// has to be asked for, and a much cheaper query than the whole window list.
+///
+/// Rarest application first. Nearly every window on a working machine tends to
+/// belong to the same browser, so a stack ordered by frequency would be five
+/// identical icons on almost every row and would separate nothing. Leading
+/// with the unusual application means the cap only ever hides *duplicates*
+/// until a workspace holds more than `STACK_MAX` distinct applications — so a
+/// task with an editor and a spreadsheet in it reads as one at a glance,
+/// instead of as another row of browsers.
+///
+/// Multiplicity is kept rather than collapsed to one icon per application:
+/// the length of the stack is itself a reading of how full the workspace is,
+/// and that is free.
+pub fn occupancy_from<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)>) -> BTreeMap<String, Occupancy> {
+    let mut per_workspace: BTreeMap<String, (usize, BTreeMap<String, usize>)> = BTreeMap::new();
+    for (workspace, bundle) in pairs {
+        if workspace.is_empty() {
+            continue;
+        }
+        let entry = per_workspace.entry(workspace.to_string()).or_default();
+        entry.0 += 1;
+        if !bundle.is_empty() {
+            *entry.1.entry(bundle.to_string()).or_default() += 1;
+        }
+    }
+
+    per_workspace
+        .into_iter()
+        .map(|(workspace, (count, per_app))| {
+            let mut apps: Vec<(String, usize)> = per_app.into_iter().collect();
+            // Ties break on the bundle id, so the same workspace draws the
+            // same stack every time the panel opens. A stack that reshuffles
+            // between openings is a stack you have to read rather than
+            // recognise, which is the whole point of having one.
+            apps.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+            let mut stack: Vec<String> = Vec::new();
+            'fill: for (bundle, n) in apps {
+                for _ in 0..n {
+                    if stack.len() == STACK_MAX {
+                        break 'fill;
+                    }
+                    stack.push(bundle.clone());
+                }
+            }
+            (workspace, Occupancy { count, stack })
+        })
+        .collect()
 }
 
 /// Coerce a typed name into something AeroSpace will accept.
@@ -257,6 +362,7 @@ pub fn build_window_menu(
                 detail: None,
                 active: false,
                 bundle: Some(w.bundle.clone()),
+                stack: Vec::new(),
             });
             by_index.insert(index, w.clone());
         }
@@ -294,6 +400,9 @@ pub struct Row {
     /// Bundle id for the icon, on window rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle: Option<String>,
+    /// Bundle ids standing in for what a workspace holds, on task rows.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub stack: Vec<String>,
 }
 
 impl Row {
@@ -308,6 +417,7 @@ impl Row {
             detail: None,
             active: false,
             bundle: None,
+            stack: Vec::new(),
         }
     }
 
@@ -325,6 +435,19 @@ impl Row {
             detail: (!title.is_empty()).then(|| shorten(title, 72)),
             bundle: Some(bundle.to_string()),
             ..Self::action("__subject__", app)
+        }
+    }
+
+    /// A task holding nothing.
+    ///
+    /// It has no window to list, but it is still somewhere a window can be
+    /// dropped — and without it the board could only rearrange what is already
+    /// spread out, never tidy into a task that is waiting empty.
+    pub fn space(name: &str) -> Self {
+        Self {
+            marker: Some("space".into()),
+            section: Some(name.to_string()),
+            ..Self::action(name, name)
         }
     }
 
@@ -355,10 +478,11 @@ pub struct Menu {
 
 /// Build the dialog list.
 ///
-/// `counts` is `None` when the workspace query failed — then no counts are
-/// shown at all, because a guessed number is worse than none.
+/// `held` is `None` when the workspace query failed — then no counts and no
+/// icons are shown at all, because a guessed number is worse than none and a
+/// guessed stack is worse than a guessed number.
 pub fn build_menu(
-    counts: Option<&BTreeMap<String, usize>>,
+    held: Option<&BTreeMap<String, Occupancy>>,
     known: &[String],
     cached: &[String],
     current: &str,
@@ -366,7 +490,7 @@ pub fn build_menu(
     labels: &BTreeMap<String, String>,
     pins: &[String],
 ) -> Menu {
-    let occupied: Vec<String> = counts.map(|c| c.keys().cloned().collect()).unwrap_or_default();
+    let occupied: Vec<String> = held.map(|h| h.keys().cloned().collect()).unwrap_or_default();
 
     let mut names: Vec<String> = Vec::new();
     for name in occupied.iter().chain(known).chain(cached).chain(std::iter::once(&current.to_string())) {
@@ -409,9 +533,10 @@ pub fn build_menu(
         for name in members {
             // A count says what it is about — the workspace — and says more
             // than a tick did. An empty task simply has no number.
-            let label = match counts.and_then(|c| c.get(&name)) {
+            let held_here = held.and_then(|h| h.get(&name));
+            let label = match held_here {
                 _ if name == current => format!("{HERE}  {name}  (this window is here)"),
-                Some(n) => format!("    {name}  ({n})"),
+                Some(o) => format!("    {name}  ({})", o.count),
                 None => format!("    {name}"),
             };
             back.insert(label.trim().to_string(), name.clone());
@@ -420,12 +545,13 @@ pub fn build_menu(
                 id: name.clone(),
                 label: name.clone(),
                 section: Some(heading.clone()),
-                count: counts.and_then(|c| c.get(&name)).copied(),
+                count: held_here.map(|o| o.count),
                 marker: (name == current).then(|| "here".to_string()),
                 pinned: pins.iter().any(|p| *p == name),
                 detail: None,
                 active: false,
                 bundle: None,
+                stack: held_here.map(|o| o.stack.clone()).unwrap_or_default(),
             });
         }
     }
@@ -447,8 +573,21 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    fn held(list: &[(&str, usize)]) -> BTreeMap<String, usize> {
-        list.iter().map(|(w, n)| (w.to_string(), *n)).collect()
+    fn held(list: &[(&str, usize)]) -> BTreeMap<String, Occupancy> {
+        list.iter()
+            .map(|(w, n)| (w.to_string(), Occupancy { count: *n, stack: Vec::new() }))
+            .collect()
+    }
+
+    fn win(workspace: &str, app: &str, bundle: &str) -> Window {
+        Window {
+            id: format!("{workspace}-{app}"),
+            workspace: workspace.into(),
+            monitor: "1".into(),
+            app: app.into(),
+            bundle: bundle.into(),
+            title: String::new(),
+        }
     }
 
     #[test]
@@ -509,6 +648,94 @@ mod tests {
         assert_eq!(headings, vec!["tyto", "art corner", "zz", "elsewhere"]);
         assert_eq!(grouped[0].1, names(&["t-forms", "t-pair"]));
         assert_eq!(grouped[3].1, names(&["house"]));
+    }
+
+    const BRAVE: &str = "com.brave.Browser";
+    const GHOSTTY: &str = "com.mitchellh.ghostty";
+    const ZED: &str = "dev.zed.Zed";
+    const OFFICE: &str = "org.libreoffice.script";
+
+    #[test]
+    fn the_stack_leads_with_the_application_that_is_unusual_here() {
+        // me-tax as it actually stands: two browser windows, a spreadsheet and
+        // an editor. The browser is the least informative thing in it.
+        let held = occupancy_of(&[
+            win("me-tax", "Brave Browser", BRAVE),
+            win("me-tax", "Brave Browser", BRAVE),
+            win("me-tax", "LibreOffice", OFFICE),
+            win("me-tax", "Zed", ZED),
+        ]);
+        let me_tax = &held["me-tax"];
+        assert_eq!(me_tax.count, 4);
+        assert_eq!(me_tax.stack, vec![ZED, OFFICE, BRAVE, BRAVE]);
+    }
+
+    #[test]
+    fn the_cap_only_ever_eats_duplicates() {
+        // Nine browser windows and one System Settings. The odd one must
+        // survive the cap, or the row says nothing the count did not.
+        let mut windows: Vec<Window> = (0..9).map(|_| win("1", "Brave Browser", BRAVE)).collect();
+        windows.push(win("1", "System Settings", "com.apple.systempreferences"));
+        let held = occupancy_of(&windows);
+        let pile = &held["1"];
+        assert_eq!(pile.count, 10);
+        assert_eq!(pile.stack.len(), STACK_MAX);
+        assert_eq!(pile.stack[0], "com.apple.systempreferences");
+        assert!(pile.stack[1..].iter().all(|b| b == BRAVE));
+    }
+
+    #[test]
+    fn a_workspace_holding_one_kind_of_thing_still_shows_its_weight() {
+        let windows: Vec<Window> = (0..8).map(|_| win("t-taskedit", "Brave Browser", BRAVE)).collect();
+        let held = occupancy_of(&windows);
+        assert_eq!(held["t-taskedit"].stack, vec![BRAVE; STACK_MAX]);
+    }
+
+    #[test]
+    fn the_same_workspace_draws_the_same_stack_every_time() {
+        // Two applications with one window each: without a tie-break the order
+        // would follow whatever the map handed back, and the row would
+        // reshuffle between openings.
+        let windows = vec![win("t-pair", "Ghostty", GHOSTTY), win("t-pair", "Zed", ZED)];
+        let first = occupancy_of(&windows);
+        let mut reversed = windows.clone();
+        reversed.reverse();
+        assert_eq!(first["t-pair"].stack, occupancy_of(&reversed)["t-pair"].stack);
+        // Equal counts, so the tie-break decides: bundle id, ascending.
+        assert_eq!(first["t-pair"].stack, vec![GHOSTTY, ZED]);
+    }
+
+    #[test]
+    fn a_window_with_no_bundle_is_counted_but_not_drawn() {
+        let held = occupancy_of(&[win("odd", "Something", ""), win("odd", "Ghostty", GHOSTTY)]);
+        assert_eq!(held["odd"].count, 2);
+        assert_eq!(held["odd"].stack, vec![GHOSTTY]);
+    }
+
+    #[test]
+    fn a_task_row_carries_the_icons_of_what_is_in_it() {
+        let held = occupancy_of(&[
+            win("ac-app", "Brave Browser", BRAVE),
+            win("me-tax", "Zed", ZED),
+            win("me-tax", "Brave Browser", BRAVE),
+            win("me-tax", "Brave Browser", BRAVE),
+        ]);
+        let menu = build_menu(Some(&held), &[], &[], "ac-app", &names(&["ac"]), &labels(), &[]);
+        let me_tax = menu.rows.iter().find(|r| r.id == "me-tax").expect("me-tax listed");
+        assert_eq!(me_tax.stack, vec![ZED, BRAVE, BRAVE]);
+        assert_eq!(me_tax.count, Some(3));
+        // A name AeroSpace has never held has nothing to draw, and must not
+        // borrow anyone else's icons.
+        let menu = build_menu(Some(&held), &names(&["ac-empty"]), &[], "ac-app", &[], &labels(), &[]);
+        let empty = menu.rows.iter().find(|r| r.id == "ac-empty").expect("ac-empty listed");
+        assert!(empty.stack.is_empty());
+        assert_eq!(empty.count, None);
+    }
+
+    #[test]
+    fn a_wedged_aerospace_draws_no_icons_at_all() {
+        let menu = build_menu(None, &[], &names(&["ac-shopify"]), "infra", &[], &labels(), &[]);
+        assert!(menu.rows.iter().all(|r| r.stack.is_empty()));
     }
 
     #[test]

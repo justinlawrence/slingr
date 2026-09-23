@@ -627,3 +627,20 @@ sling key twice running used to offer to sling the dialog itself.
 
 They are AeroSpace's own concept. Mission Control, Stage Manager and the
 desktop switcher know nothing about them.
+
+Measured on this machine, the two counts are not even close:
+
+```
+macOS Spaces:         20
+AeroSpace workspaces: 36
+```
+
+And the mechanism rules out ever reconciling them. AeroSpace does not move a
+window to another Space to hide it — it parks the window off screen *within*
+the Space it is already in. So every window of every workspace on a monitor
+belongs, as far as macOS is concerned, to the same Space.
+
+The consequence is that Ctrl-↑ cannot be made to group by task. It groups by
+Space, it is right to, and there is nothing to configure. Asking macOS for that
+view is the wrong request; drawing it is the right one, which is what the board
+does.

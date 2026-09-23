@@ -37,6 +37,9 @@ enum Cmd {
     /// Open the picker on the task list, to go to one rather than send a
     /// window to one.
     Jump,
+    /// Open the board: every window on the machine, grouped by the task it is
+    /// in, with dragging to move them between tasks.
+    Board,
     /// Go to the workspace matching herdr's focused tab, once.
     ///
     /// Made for herdr's `tab.focused` plugin hook. Does the same as a single
@@ -104,6 +107,7 @@ fn main() -> Result<()> {
         Some(Cmd::Snapshot) => { snapshot()?; Ok(()) }
         Some(Cmd::Restore { dry_run }) => restore(dry_run),
         Some(Cmd::Jump) => sling_in(app::Mode::Jump),
+        Some(Cmd::Board) => sling_in(app::Mode::Board),
         Some(Cmd::Goto) => goto_now(),
         Some(Cmd::Follow) => follow_now(),
         Some(Cmd::Following { prune }) => list_following(prune),
@@ -464,7 +468,7 @@ fn record_one(run: Run, cache: &mut NameCache, follow: &mut FollowList) -> Resul
         ActionLog::default().append(&entry)?;
     }
     let mut entry = log_entry(&run.outcome, run.window.as_ref());
-    if run.counts.is_none() {
+    if run.occupancy.is_none() {
         entry["aerospace_unavailable"] = json!(true);
     }
     ActionLog::default().append(&entry)?;
@@ -498,8 +502,12 @@ fn record_many(batch: Batch, cache: &mut NameCache, follow: &mut FollowList) -> 
     }
 
     let moved = batch.moved();
-    let target = batch.target.clone().unwrap_or_default();
-    say!("moved {moved} of {size} to {target}");
+    match &batch.target {
+        Some(target) => say!("moved {moved} of {size} to {target}"),
+        // The board sends windows to several tasks at once, so there is no one
+        // destination to name.
+        None => say!("moved {moved} of {size}"),
+    }
     for (window, outcome) in &batch.results {
         if !matches!(outcome, Outcome::Moved { .. }) {
             say!("  skipped [{}] {} — {}", window.id, window.label(), outcome.kind());
@@ -638,7 +646,11 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
     let began = Instant::now();
     let focused = aero.focused_window();
     let here = aero.focused_workspace().unwrap_or_default();
-    let counts = aero.window_counts().unwrap_or_default();
+    let occupancy = aero.occupancy().unwrap_or_default();
+    // The log and `decide` both only ever wanted the numbers; the icon stack
+    // is a panel concern and has no business in the watch record.
+    let counts: std::collections::BTreeMap<String, usize> =
+        occupancy.iter().map(|(w, o)| (w.clone(), o.count)).collect();
     let read_ms = began.elapsed().as_millis();
 
     let mut entry = json!({
@@ -894,11 +906,18 @@ fn probe() -> Result<()> {
         Ok(out) => say!("focused  {out}"),
         Err(why) => say!("focused  FAILED: {why}"),
     }
-    match aero.window_counts() {
+    match aero.occupancy() {
         Some(counts) => {
-            let shown: Vec<String> =
-                counts.iter().map(|(w, n)| format!("{w} ({n})")).collect();
-            say!("occupied {}", shown.join(", "));
+            // The stack too, because "what will the panel draw on this row"
+            // is exactly the question probe exists to answer.
+            for (workspace, o) in &counts {
+                let apps: Vec<&str> = o
+                    .stack
+                    .iter()
+                    .map(|b| b.rsplit('.').next().unwrap_or(b.as_str()))
+                    .collect();
+                say!("occupied {workspace} ({}) {}", o.count, apps.join(" "));
+            }
         }
         None => say!("occupied FAILED"),
     }
