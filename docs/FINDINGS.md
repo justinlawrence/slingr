@@ -422,6 +422,28 @@ pile-up. It removes itself now, and a refusal is recorded rather than silent.
 Recording it was what showed the rest: more `goto` runs than tab switches, and
 real switches being eaten while a heavier predecessor was still going.
 
+## Two idempotent halves still oscillate
+
+Pairing herdr tabs with AeroSpace workspaces in both directions was judged
+safe because each side stops when it finds the other already correct. That
+holds when each reads current state, and under rapid switching neither does:
+
+```
+01:13:54  moved  t-video -> t-pair
+01:13:54  moved  t-pair  -> t-video     same second, opposite direction
+01:13:57  moved  t-video -> t-pair
+01:13:59  moved  t-pair  -> t-video
+```
+
+`goto` changes the workspace, AeroSpace fires its callback, and `follow` reads
+the workspace a moment later — by which point the herdr tab has moved on. It
+disagrees, focuses a tab, and that calls `goto` again.
+
+The fix is not more checking but less: the side that caused a change says so,
+and the other believes it for a couple of seconds. A workspace change that came
+*from* a herdr tab never needs reporting back to herdr. Two seconds is short on
+purpose — it swallows one echo rather than suppressing anything a person did.
+
 ## AeroSpace has no sticky windows## herdr can emit phantom focus events in bursts
 
 Reported against herdr: on an idle session with several agent panes producing
@@ -544,6 +566,28 @@ pile-up. It removes itself now, and a refusal is recorded rather than silent.
 
 Recording it was what showed the rest: more `goto` runs than tab switches, and
 real switches being eaten while a heavier predecessor was still going.
+
+## Two idempotent halves still oscillate
+
+Pairing herdr tabs with AeroSpace workspaces in both directions was judged
+safe because each side stops when it finds the other already correct. That
+holds when each reads current state, and under rapid switching neither does:
+
+```
+01:13:54  moved  t-video -> t-pair
+01:13:54  moved  t-pair  -> t-video     same second, opposite direction
+01:13:57  moved  t-video -> t-pair
+01:13:59  moved  t-pair  -> t-video
+```
+
+`goto` changes the workspace, AeroSpace fires its callback, and `follow` reads
+the workspace a moment later — by which point the herdr tab has moved on. It
+disagrees, focuses a tab, and that calls `goto` again.
+
+The fix is not more checking but less: the side that caused a change says so,
+and the other believes it for a couple of seconds. A workspace change that came
+*from* a herdr tab never needs reporting back to herdr. Two seconds is short on
+purpose — it swallows one echo rather than suppressing anything a person did.
 
 ## AeroSpace has no sticky windows
 

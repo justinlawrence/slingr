@@ -328,6 +328,8 @@ fn goto_now() -> Result<()> {
                         moved.id == w.id && matches!(outcome, Outcome::Moved { .. })
                     })
             });
+            // Said before the switch, so the callback it triggers can see it.
+            store::Echo::say(&target);
             let hands_kept = matches!((came_along, &hands_on), (true, Some(_)));
             match (came_along, hands_on) {
                 (true, Some(w)) => {
@@ -394,9 +396,13 @@ fn follow_now() -> Result<()> {
     // This cannot chase its own tail: focusing a tab that is already focused
     // is skipped, and were it not, the return trip finds the workspace already
     // correct and stops there.
-    if let Some(tab) = slingr::herdr::tab_named(&here) {
-        if !tab.focused && slingr::herdr::focus_tab(&tab.id) {
-            say!("herdr -> {here}");
+    // Unless we are the reason it changed. Reporting our own switch back to
+    // herdr is what makes the pair chase each other.
+    if !store::Echo::was_ours(&here) {
+        if let Some(tab) = slingr::herdr::tab_named(&here) {
+            if !tab.focused && slingr::herdr::focus_tab(&tab.id) {
+                say!("herdr -> {here}");
+            }
         }
     }
 

@@ -438,3 +438,42 @@ not json
 ").is_empty());
     }
 }
+
+/// A note that sling itself caused the workspace to change.
+///
+/// The two directions of the pairing can race. `goto` switches the workspace
+/// because a herdr tab changed; AeroSpace fires its callback; `follow` reads
+/// the state a moment later, sees a workspace it thinks disagrees with herdr,
+/// and focuses a tab — which changes the tab, which calls `goto` again. Both
+/// sides are idempotent when they read current state, and under rapid
+/// switching neither does.
+///
+/// So the side that caused the change says so, and the other believes it. A
+/// workspace change that came *from* a herdr tab never needs to be reported
+/// back to herdr.
+pub struct Echo;
+
+impl Echo {
+    fn path() -> PathBuf {
+        state_dir().join("echo")
+    }
+
+    pub fn say(workspace: &str) {
+        let _ = fs::create_dir_all(state_dir());
+        let _ = fs::write(Self::path(), format!("{} {}", now_unix(), workspace));
+    }
+
+    /// True if this workspace was reached by sling within the last couple of
+    /// seconds. Short on purpose: it exists to swallow one echo, not to
+    /// suppress anything a person did.
+    pub fn was_ours(workspace: &str) -> bool {
+        let Ok(text) = fs::read_to_string(Self::path()) else {
+            return false;
+        };
+        let Some((at, ws)) = text.trim().split_once(' ') else {
+            return false;
+        };
+        let Ok(at) = at.parse::<i64>() else { return false };
+        ws == workspace && now_unix().saturating_sub(at) <= 2
+    }
+}
