@@ -82,6 +82,15 @@ something new" are different intentions.
 action, not a destination. Naming happens when you know what the task is, not
 when the window opens, which is why new windows are never auto-filed.
 
+A name is more often typed than chosen, so the search box takes it: type
+something nothing answers to and it offers to make it, with return doing so
+when nothing matched at all. Searching for a task you have not made yet and
+making it are the same gesture. The name is shown sanitised before you commit
+to it, since `w/forms` is what herdr calls it and `w-forms` is what AeroSpace
+will accept.
+
+That leaves the free-text dialog used only by the AppleScript fallback.
+
 ## Draining
 
 A workspace that has collected dozens of windows is a transitional state, not a

@@ -191,6 +191,36 @@ final class Picker: ObservableObject {
         }
     }
 
+    /// What the typed text would be called as a task.
+    ///
+    /// The rule is AeroSpace's: a "/" hangs it on a modal dialog, so herdr's
+    /// "w/forms" becomes "w-forms". Mirrored here only to show the name before
+    /// it is made — `picker::sanitise_workspace` on the Rust side decides it,
+    /// and a test there pins the rule.
+    var typedTaskName: String {
+        var out = ""
+        var prevDash = false
+        for ch in query.trimmingCharacters(in: .whitespaces) {
+            if ch.isASCII && (ch.isLetter || ch.isNumber || ch == "." || ch == "_" || ch == "-") {
+                out.append(ch)
+                prevDash = ch == "-"
+            } else if !prevDash {
+                out.append("-")
+                prevDash = true
+            }
+        }
+        while out.hasPrefix("-") { out.removeFirst() }
+        while out.hasSuffix("-") { out.removeLast() }
+        return out
+    }
+
+    /// Offer to make it only when nothing already answers to that name.
+    var canMakeTyped: Bool {
+        let name = typedTaskName
+        guard !name.isEmpty else { return false }
+        return !request.items.contains { $0.marker == nil && $0.id == name }
+    }
+
     /// The tab that is not showing, for the keyboard shortcut.
     var otherTab: Item? { tabs.first { $0.active != true } }
 
@@ -267,6 +297,11 @@ final class Picker: ObservableObject {
     }
 
     func confirm() -> [String] {
+        // Typed a name nothing answers to and pressed return: that is a task
+        // you meant to make, not a search that failed.
+        if visible.isEmpty && canMakeTyped {
+            return ["__new__:" + query]
+        }
         if multi, !chosen.isEmpty {
             // Keep the order they were listed in, not the order they were ticked.
             return request.items.map(\.id).filter { chosen.contains($0) }
@@ -343,7 +378,23 @@ struct PanelView: View {
                     }
                     Text(picker.query).font(type.body).foregroundStyle(ink.text)
                 }
-                Spacer()
+                Spacer(minLength: 8)
+                // A name nothing answers to is a task you have not made yet.
+                if picker.canMakeTyped {
+                    HStack(spacing: 6) {
+                        Text("＋").foregroundStyle(ink.accent)
+                        Text(picker.typedTaskName).foregroundStyle(ink.text)
+                        if picker.visible.isEmpty {
+                            Text("⏎").foregroundStyle(ink.dim)
+                        }
+                    }
+                    .font(type.small)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(ink.accent.opacity(0.5), lineWidth: 1))
+                    .contentShape(Rectangle())
+                    .onTapGesture { picker.onConfirm?(["__new__:" + picker.query]) }
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)

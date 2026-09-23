@@ -28,6 +28,10 @@ pub const ALL_APP: &str = "__all_app__";
 /// chosen. The list has to be rebuilt afterwards, so it reopens.
 pub const PIN: &str = "__pin__:";
 
+/// A task named in the search box rather than in a second dialog. The typed
+/// text follows the prefix; it is sanitised here, not by whoever typed it.
+pub const NEW_NAMED: &str = "__new__:";
+
 
 
 pub fn all_row(following: bool) -> String {

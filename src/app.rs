@@ -278,6 +278,25 @@ pub fn run(
         });
     }
 
+    // Named in the search box: no second dialog, and the name is whatever was
+    // typed, put through the same rules as any other.
+    if let Some(typed) = choice.strip_prefix(picker::NEW_NAMED) {
+        let name = picker::sanitise_workspace(typed);
+        if name.is_empty() {
+            return done(Outcome::EmptyName { raw: typed.to_string() });
+        }
+        if !wm.move_window(&window.id, &name) {
+            return done(Outcome::MoveFailed { to: name });
+        }
+        let brought = follow_to(wm, follow, &name, &window.id, None, Some(&window.monitor));
+        return Run {
+            window: Some(window.clone()),
+            counts: counts.clone(),
+            outcome: Outcome::Moved { to: name, created: true },
+            brought,
+        };
+    }
+
     let target = if choice == NEW {
         let Some(raw) = prompt.ask_text("Sling to a new workspace", "Name the new workspace") else {
             return done(Outcome::Cancelled);
@@ -414,6 +433,31 @@ pub fn run_many(
                 .collect(),
             aborted: None,
         };
+    }
+
+    // Named in the search box: no second dialog, and the name is whatever was
+    // typed, put through the same rules as any other.
+    // Named in the search box: the batch goes to a task that did not exist a
+    // moment ago, without a second dialog.
+    if let Some(typed) = choice.strip_prefix(picker::NEW_NAMED) {
+        let name = picker::sanitise_workspace(typed);
+        if name.is_empty() {
+            return Batch::stopped(Outcome::EmptyName { raw: typed.to_string() });
+        }
+        let on = chosen.first().map(|w| w.monitor.clone());
+        let mut results: Vec<(Window, Outcome)> = chosen
+            .into_iter()
+            .map(|w| {
+                let outcome = if wm.move_window(&w.id, &name) {
+                    Outcome::Moved { to: name.clone(), created: true }
+                } else {
+                    Outcome::MoveFailed { to: name.clone() }
+                };
+                (w, outcome)
+            })
+            .collect();
+        results.extend(follow_to(wm, follow, &name, "", None, on.as_deref()));
+        return Batch { target: Some(name), results, aborted: None };
     }
 
     let target = if choice == NEW {

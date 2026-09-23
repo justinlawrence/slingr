@@ -157,6 +157,11 @@ impl Prompt for FakePrompt {
     fn choose_rows(&self, rows: &[Row], _t: &str, _p: &str) -> Option<String> {
         let queued = self.choices.borrow_mut().pop_front();
         let wanted = queued.or_else(|| self.choice.clone())?;
+        // A name typed into the search box is not a row; it is an answer the
+        // list could not have offered.
+        if wanted.starts_with("__new__:") {
+            return Some(wanted.clone());
+        }
         rows.iter()
             .find(|r| r.id == wanted || r.label == wanted || r.label.ends_with(wanted.as_str()))
             .map(|r| r.id.clone())
@@ -906,4 +911,52 @@ fn following_the_application_ticks_the_application_row_only() {
     assert!(!rows.iter().find(|r| r.id == ALL).unwrap().active);
     // And no workspace claims a window that is shown on all of them.
     assert!(!rows.iter().any(|r| r.marker.as_deref() == Some("here")));
+}
+
+#[test]
+fn a_name_typed_in_the_search_box_makes_the_task() {
+    // No second dialog: the search box already has the name in it.
+    let wm = FakeWm::new();
+    let run = app::run(
+        &wm,
+        &FakePrompt::picking("__new__:t/forms"),
+        &config(),
+        &[],
+        Following::default(),
+        &[],
+    );
+
+    // Sanitised on the way through, like any other name.
+    assert_eq!(run.outcome, Outcome::Moved { to: "t-forms".into(), created: true });
+    assert_eq!(*wm.calls.borrow(), vec![Call::MoveById("11513".into(), "t-forms".into())]);
+}
+
+#[test]
+fn a_typed_name_that_sanitises_away_makes_nothing() {
+    let wm = FakeWm::new();
+    let run = app::run(
+        &wm,
+        &FakePrompt::picking("__new__:///"),
+        &config(),
+        &[],
+        Following::default(),
+        &[],
+    );
+    assert_eq!(run.outcome, Outcome::EmptyName { raw: "///".into() });
+    assert!(wm.calls.borrow().is_empty());
+}
+
+#[test]
+fn a_typed_name_takes_the_whole_batch() {
+    let wm = FakeWm::new();
+    let prompt = FakePrompt {
+        choice: Some("__new__:w/new thing".into()),
+        choices: RefCell::new(Default::default()),
+        text: None,
+        many: vec![1, 2],
+    };
+    let batch = app::run_many(&wm, &prompt, &config(), &[], Following::default(), &[]);
+
+    assert_eq!(batch.target.as_deref(), Some("w-new-thing"));
+    assert_eq!(batch.moved(), 2);
 }
