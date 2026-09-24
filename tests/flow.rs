@@ -210,7 +210,7 @@ fn config() -> Config {
 #[test]
 fn moves_the_window_it_was_asked_about() {
     let wm = FakeWm::new();
-    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "ac-app".into(), created: false });
     // Focus must come first: move-node-to-workspace acts on whatever is
@@ -230,7 +230,7 @@ fn the_move_names_its_window_and_never_touches_focus() {
     // focus call is made at all, so there is nothing to steal.
     let mut wm = FakeWm::new();
     wm.focus_succeeds = false;
-    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "ac-app".into(), created: false });
     assert_eq!(*wm.calls.borrow(), vec![Call::MoveById("11513".into(), "ac-app".into())]);
@@ -246,7 +246,7 @@ fn slings_to_a_task_that_holds_nothing_yet() {
     // These entries are indented for alignment, and the indent is lost on the
     // way back from the dialog — so the lookup has to survive that.
     let wm = FakeWm::new();
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "t-forms".into(), created: true });
     assert_eq!(*wm.calls.borrow(), vec![Call::MoveById("11513".into(), "t-forms".into())]);
@@ -265,7 +265,7 @@ fn refuses_to_sling_its_own_dialog() {
         bundle: "com.apple.systemevents".into(),
         title: String::new(),
     });
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::OwnDialog);
     assert!(wm.calls.borrow().is_empty());
@@ -275,14 +275,14 @@ fn refuses_to_sling_its_own_dialog() {
 fn a_failed_move_is_reported_rather_than_assumed() {
     let mut wm = FakeWm::new();
     wm.move_succeeds = false;
-    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::MoveFailed { to: "ac-app".into() });
 }
 
 #[test]
 fn cancelling_moves_nothing() {
     let wm = FakeWm::new();
-    let run = app::run(&wm, &FakePrompt { choice: None, choices: RefCell::new(Default::default()), text: None, many: Vec::new() }, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt { choice: None, choices: RefCell::new(Default::default()), text: None, many: Vec::new() }, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::Cancelled);
     assert!(wm.calls.borrow().is_empty());
 }
@@ -293,7 +293,7 @@ fn a_choice_that_names_no_task_moves_nothing() {
     // remaining case — an answer that matches no row at all.
     let wm = FakeWm::new();
     let prompt = FakePrompt { choice: Some("not-a-workspace".into()), choices: RefCell::new(Default::default()), text: None, many: Vec::new() };
-    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::Cancelled);
     assert!(wm.calls.borrow().is_empty());
 }
@@ -301,7 +301,7 @@ fn a_choice_that_names_no_task_moves_nothing() {
 #[test]
 fn slinging_to_where_it_already_is_moves_nothing() {
     let wm = FakeWm::new();
-    let run = app::run(&wm, &FakePrompt::picking("infra"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("infra"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::SameWorkspace);
     assert!(wm.calls.borrow().is_empty());
 }
@@ -310,7 +310,7 @@ fn slinging_to_where_it_already_is_moves_nothing() {
 fn a_new_workspace_is_named_the_way_herdr_names_tabs() {
     let wm = FakeWm::new();
     let prompt = FakePrompt { choice: Some(NEW.into()), choices: RefCell::new(Default::default()), text: Some("t/forms".into()), many: Vec::new() };
-    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     // "/" would hang AeroSpace on a modal, so the reflex spelling is accepted
     // and translated rather than rejected.
@@ -322,7 +322,7 @@ fn a_new_workspace_is_named_the_way_herdr_names_tabs() {
 fn a_name_that_sanitises_away_moves_nothing() {
     let wm = FakeWm::new();
     let prompt = FakePrompt { choice: Some(NEW.into()), choices: RefCell::new(Default::default()), text: Some("///".into()), many: Vec::new() };
-    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::EmptyName { raw: "///".into() });
     assert!(wm.calls.borrow().is_empty());
 }
@@ -331,7 +331,7 @@ fn a_name_that_sanitises_away_moves_nothing() {
 fn nothing_focused_is_not_an_error() {
     let mut wm = FakeWm::new();
     wm.window = None;
-    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::NoWindow);
     assert!(run.window.is_none());
 }
@@ -343,7 +343,7 @@ fn a_silent_aerospace_still_gives_a_usable_menu() {
     let mut wm = FakeWm::new();
     wm.occupancy = None;
     let cached = vec!["ac-shopify".into()];
-    let run = app::run(&wm, &FakePrompt::picking("ac-shopify"), &config(), &cached, Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("ac-shopify"), &config(), &cached, Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "ac-shopify".into(), created: false });
     assert!(run.occupancy.is_none());
@@ -355,7 +355,7 @@ fn a_silent_aerospace_still_gives_a_usable_menu() {
 fn sends_every_selected_window_to_one_task() {
     let wm = FakeWm::new();
     // Rows 1-3 are the infra windows: the drained workspace is listed first.
-    let batch = app::run_many(&wm, &FakePrompt::selecting(&[1, 2, 3], "t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let batch = app::run_many(&wm, &FakePrompt::selecting(&[1, 2, 3], "t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(batch.target.as_deref(), Some("t-forms"));
     assert_eq!(batch.moved(), 3);
@@ -385,7 +385,7 @@ fn shows_the_id_only_where_titles_collide() {
 fn addresses_windows_by_row_not_by_title() {
     // 7695 and 7686 share a title. Selecting one row must move that one window.
     let wm = FakeWm::new();
-    let batch = app::run_many(&wm, &FakePrompt::selecting(&[2], "t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let batch = app::run_many(&wm, &FakePrompt::selecting(&[2], "t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(batch.moved(), 1);
     let (moved, _) = &batch.results[0];
@@ -397,7 +397,7 @@ fn addresses_windows_by_row_not_by_title() {
 fn an_unreachable_window_does_not_strand_the_rest() {
     let mut wm = FakeWm::new();
     wm.focus_refuses = vec!["7686".into()];
-    let batch = app::run_many(&wm, &FakePrompt::selecting(&[1, 2, 3], "t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let batch = app::run_many(&wm, &FakePrompt::selecting(&[1, 2, 3], "t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(batch.moved(), 2);
     let skipped: Vec<&str> = batch
@@ -413,7 +413,7 @@ fn an_unreachable_window_does_not_strand_the_rest() {
 fn a_window_already_in_the_target_is_left_alone() {
     let wm = FakeWm::new();
     // Row 4 is the window already sitting in t-mail.
-    let batch = app::run_many(&wm, &FakePrompt::selecting(&[4], "t-mail"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let batch = app::run_many(&wm, &FakePrompt::selecting(&[4], "t-mail"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(batch.moved(), 0);
     assert_eq!(batch.results[0].1, Outcome::SameWorkspace);
@@ -423,7 +423,7 @@ fn a_window_already_in_the_target_is_left_alone() {
 #[test]
 fn selecting_nothing_moves_nothing() {
     let wm = FakeWm::new();
-    let batch = app::run_many(&wm, &FakePrompt::selecting(&[], "t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let batch = app::run_many(&wm, &FakePrompt::selecting(&[], "t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert_eq!(batch.aborted, Some(Outcome::Cancelled));
     assert!(wm.calls.borrow().is_empty());
 }
@@ -504,7 +504,7 @@ impl Prompt for Scripted {
 fn every_mode_is_offered_as_a_tab_with_the_showing_one_marked() {
     let wm = FakeWm::new();
     let prompt = Scripted::new(vec![Step::Pick(TO_MANY.into()), Step::Select(vec![1])]);
-    let _ = app::run_session(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let _ = app::run_session(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     // A mode's front door offers both tabs with one marked. Every step after
     // that carries none: switching mode halfway through picking windows, or
@@ -538,7 +538,7 @@ fn switching_to_several_then_moving_them() {
         Step::Select(vec![1, 2]),
         Step::Pick("t-forms".into()),
     ]);
-    match app::run_session(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[] }, &[]) {
+    match app::run_session(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]) {
         Session::Batch(b) => {
             assert_eq!(b.target.as_deref(), Some("t-forms"));
             assert_eq!(b.moved(), 2);
@@ -555,7 +555,7 @@ fn switching_across_and_back_lands_on_the_focused_window() {
         Step::SwitchBack,
         Step::Pick("ac-app".into()),
     ]);
-    match app::run_session(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[] }, &[]) {
+    match app::run_session(&wm, &prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]) {
         Session::Single(r) => {
             assert_eq!(r.outcome, Outcome::Moved { to: "ac-app".into(), created: false });
             // The focused window, not one chosen from the list.
@@ -590,7 +590,7 @@ fn endless_toggling_gives_up_rather_than_spinning() {
         }
     }
     let wm = FakeWm::new();
-    match app::run_session(&wm, &AlwaysSwitch, &config(), &[], Following { windows: &[], apps: &[] }, &[]) {
+    match app::run_session(&wm, &AlwaysSwitch, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]) {
         Session::Single(r) => assert_eq!(r.outcome, Outcome::Cancelled),
         Session::Batch(_) => panic!("expected the loop to give up"),
     }
@@ -602,7 +602,7 @@ fn endless_toggling_gives_up_rather_than_spinning() {
 #[test]
 fn picking_all_workspaces_tags_rather_than_moves() {
     let wm = FakeWm::new();
-    let run = app::run(&wm, &FakePrompt::picking(ALL), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking(ALL), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Following { whole_app: false });
     // A standing instruction, not a destination: the window stays put.
@@ -613,7 +613,7 @@ fn picking_all_workspaces_tags_rather_than_moves() {
 fn picking_it_again_takes_the_window_off_the_list() {
     let wm = FakeWm::new();
     let following = vec!["11513".to_string()];
-    let run = app::run(&wm, &FakePrompt::picking(ALL), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking(ALL), &config(), &[], Following { windows: &following, apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Unfollowing { whole_app: false });
     assert!(wm.calls.borrow().is_empty());
@@ -627,7 +627,7 @@ fn a_sling_leaves_your_followers_where_you_are() {
     // left the user looking at nothing.
     let wm = FakeWm::new();
     let following = vec!["7695".to_string()];
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &following, apps: &[], grounded: &[] }, &[]);
 
     assert_eq!(run.outcome, Outcome::Moved { to: "t-forms".into(), created: true });
     assert!(run.brought.is_empty(), "a sling brings nothing along");
@@ -647,7 +647,7 @@ fn slinging_many_also_leaves_your_followers_alone() {
         &FakePrompt::selecting(&[1], "t-forms"),
         &config(),
         &[],
-        Following { windows: &following, apps: &[] },
+        Following { windows: &following, apps: &[], grounded: &[] },
         &[],
     );
     assert!(
@@ -664,7 +664,7 @@ fn arriving_somewhere_is_what_brings_your_followers() {
     let following = vec!["7695".to_string()];
     let brought = app::follow_to(
         &wm,
-        Following { windows: &following, apps: &[] },
+        Following { windows: &following, apps: &[], grounded: &[] },
         "t-forms",
         "",
         None,
@@ -685,7 +685,7 @@ fn a_follower_comes_from_any_workspace() {
     let following = vec!["19369".to_string()];
     let brought = app::follow_to(
         &wm,
-        Following { windows: &following, apps: &[] },
+        Following { windows: &following, apps: &[], grounded: &[] },
         "t-forms",
         "",
         None,
@@ -699,7 +699,7 @@ fn a_follower_comes_from_any_workspace() {
 fn a_follower_already_in_the_target_is_not_moved() {
     let wm = FakeWm::new();
     let following = vec!["7695".to_string()];
-    let run = app::run(&wm, &FakePrompt::picking("infra"), &config(), &[], Following { windows: &following, apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("infra"), &config(), &[], Following { windows: &following, apps: &[], grounded: &[] }, &[]);
 
     // Slinging to where the window already is moves nothing at all.
     assert_eq!(run.outcome, Outcome::SameWorkspace);
@@ -713,7 +713,7 @@ fn an_unreachable_follower_does_not_break_the_arrival() {
     let following = vec!["7695".to_string(), "19369".to_string()];
     let brought = app::follow_to(
         &wm,
-        Following { windows: &following, apps: &[] },
+        Following { windows: &following, apps: &[], grounded: &[] },
         "t-forms",
         "",
         None,
@@ -731,7 +731,7 @@ fn an_unreachable_follower_does_not_break_the_arrival() {
 #[test]
 fn no_followers_means_no_extra_queries() {
     let wm = FakeWm::new();
-    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let run = app::run(&wm, &FakePrompt::picking("t-forms"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     assert!(run.brought.is_empty());
     assert_eq!(*wm.calls.borrow(), vec![Call::MoveById("11513".into(), "t-forms".into())]);
@@ -797,13 +797,13 @@ fn show_on_all_workspaces_is_a_row_that_carries_its_state() {
     // Not an action that announces itself: a setting, sitting with the current
     // workspace because both answer where this window lives.
     let wm = FakeWm::new();
-    let off = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let off = app::run(&wm, &FakePrompt::picking("ac-app"), &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     assert!(matches!(off.outcome, Outcome::Moved { .. }));
 
     // Rebuilt with the window following, the row reports it.
     let following = vec!["11513".to_string()];
     let prompt = FakePrompt::picking(ALL);
-    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &following, apps: &[] }, &[]);
+    let run = app::run(&wm, &prompt, &config(), &[], Following { windows: &following, apps: &[], grounded: &[] }, &[]);
     assert_eq!(run.outcome, Outcome::Unfollowing { whole_app: false }, "picking it again turns it off");
 }
 
@@ -816,7 +816,7 @@ fn a_window_shown_everywhere_is_not_also_claimed_by_one_workspace() {
     // not in any of them, so only one of the pair may be ticked.
     let wm = FakeWm::new();
     let seen = Capture(RefCell::new(Vec::new()));
-    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &["11513".to_string()], apps: &[] }, &[]);
+    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &["11513".to_string()], apps: &[], grounded: &[] }, &[]);
 
     let rows = seen.0.borrow();
     let all = rows.iter().find(|r| r.id == ALL).expect("the setting should be offered");
@@ -849,7 +849,7 @@ fn the_here_group_opens_with_whichever_answer_is_true() {
 
     // Ordinarily the window is in a workspace, so that comes first.
     let seen = Capture(RefCell::new(Vec::new()));
-    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
     let here: Vec<String> = seen.0.borrow().iter()
         .filter(|r| r.section.as_deref() == Some("here"))
         .map(|r| r.id.clone())
@@ -858,7 +858,7 @@ fn the_here_group_opens_with_whichever_answer_is_true() {
 
     // Shown everywhere, the setting is the answer and leads.
     let seen = Capture(RefCell::new(Vec::new()));
-    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &["11513".to_string()], apps: &[] }, &[]);
+    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &["11513".to_string()], apps: &[], grounded: &[] }, &[]);
     let here: Vec<String> = seen.0.borrow().iter()
         .filter(|r| r.section.as_deref() == Some("here"))
         .map(|r| r.id.clone())
@@ -872,7 +872,7 @@ fn a_setting_is_never_described_as_empty() {
     // count, so the front end is told not to look for one.
     let wm = FakeWm::new();
     let seen = Capture(RefCell::new(Vec::new()));
-    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &[], apps: &[] }, &[]);
+    let _ = app::run(&wm, &seen, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[]);
 
     let all = seen.0.borrow().iter().find(|r| r.id == ALL).cloned().expect("offered");
     assert_eq!(all.marker.as_deref(), Some("setting"));
@@ -890,7 +890,7 @@ fn a_follower_on_another_screen_is_left_alone() {
     let following = vec!["7695".to_string(), "42".to_string()];
     let brought = app::follow_to(
         &wm,
-        Following { windows: &following, apps: &[] },
+        Following { windows: &following, apps: &[], grounded: &[] },
         "t-forms",
         "",
         None,
@@ -927,7 +927,7 @@ fn a_key_can_open_straight_onto_the_jump_tab() {
     let wm = FakeWm::new();
     let seen = Capture(RefCell::new(Vec::new()));
     let _ = app::run_session_from(
-        app::Mode::Jump, &wm, &seen, &config(), &[], Following { windows: &[], apps: &[] }, &[],
+        app::Mode::Jump, &wm, &seen, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] }, &[],
     );
     let active: Vec<String> = seen.0.borrow().iter()
         .filter(|r| r.marker.as_deref() == Some("tab") && r.active)
@@ -947,7 +947,7 @@ fn following_an_application_covers_windows_it_has_not_opened_yet() {
     let mut wm = wm;
     wm.all.push(later);
 
-    let follow = Following { windows: &[], apps: &["com.apple.finder".to_string()] };
+    let follow = Following { windows: &[], apps: &["com.apple.finder".to_string()], grounded: &[] };
     let brought = app::follow_to(&wm, follow, "t-forms", "", None, None);
 
     assert_eq!(brought.len(), 1, "the Finder window should come along");
@@ -973,7 +973,7 @@ fn the_picker_offers_the_window_and_its_application_separately() {
 fn following_the_application_ticks_the_application_row_only() {
     let wm = FakeWm::new();
     let seen = Capture(RefCell::new(Vec::new()));
-    let follow = Following { windows: &[], apps: &["com.brave.Browser".to_string()] };
+    let follow = Following { windows: &[], apps: &["com.brave.Browser".to_string()], grounded: &[] };
     let _ = app::run(&wm, &seen, &config(), &[], follow, &[]);
 
     let rows = seen.0.borrow();
@@ -1074,7 +1074,7 @@ fn sling_to(window: &str, workspace: &str) -> String {
 }
 
 fn board(wm: &FakeWm, prompt: &BoardAnswer) -> Session {
-    app::run_board(wm, prompt, &config(), &[], Following { windows: &[], apps: &[] })
+    app::run_board(wm, prompt, &config(), &[], Following { windows: &[], apps: &[], grounded: &[] })
 }
 
 #[test]
@@ -1236,7 +1236,7 @@ fn every_tab_switches_mode_rather_than_being_taken_for_a_task() {
     // asked AeroSpace to sling the window into a workspace called
     // "__board__". Adding a fifth mode must fail here, not in the action log.
     let cfg = config();
-    let nothing_follows = || Following { windows: &[], apps: &[] };
+    let nothing_follows = || Following { windows: &[], apps: &[], grounded: &[] };
 
     for tab in MODES.iter().filter(|t| **t != TO_ONE) {
         let wm = FakeWm::new();
@@ -1273,4 +1273,70 @@ fn every_tab_switches_mode_rather_than_being_taken_for_a_task() {
         }
         assert!(wm.calls.borrow().is_empty(), "changing tab moved something ({tab})");
     }
+}
+
+// ------------------------------------------------- global by nature
+
+fn finder(id: &str, workspace: &str, title: &str) -> Window {
+    let mut w = window(id, workspace, title);
+    w.app = "Finder".into();
+    w.bundle = "com.apple.finder".into();
+    w
+}
+
+#[test]
+fn finder_follows_you_without_anyone_having_asked() {
+    // Nothing on the list at all. Finder still belongs everywhere, because
+    // that is a fact about Finder rather than a preference about a window.
+    let nothing = Following { windows: &[], apps: &[], grounded: &[] };
+    assert!(nothing.has(&finder("9357", "me-tax", "tyto-play-assets")));
+    assert!(!nothing.has(&window("11513", "infra", "Arty Corner Mail")));
+    assert!(!nothing.is_empty(), "there is always something to fetch while Finder is global");
+}
+
+#[test]
+fn a_finder_window_you_slung_stays_where_you_put_it() {
+    let grounded = vec!["9357".to_string()];
+    let follow = Following { windows: &[], apps: &[], grounded: &grounded };
+
+    assert!(!follow.has(&finder("9357", "me-tax", "tyto-play-assets")), "slung, so it stays");
+    // Its siblings are unaffected: grounding is about the window in front of
+    // you, not about Finder.
+    assert!(follow.has(&finder("12160", "1", "jl-personal-tax")));
+}
+
+#[test]
+fn grounding_outranks_following_the_application_too() {
+    let grounded = vec!["9357".to_string()];
+    let apps = vec!["com.apple.finder".to_string()];
+    let follow = Following { windows: &[], apps: &apps, grounded: &grounded };
+    assert!(!follow.has(&finder("9357", "me-tax", "x")), "an explicit placement wins");
+}
+
+#[test]
+fn slinging_a_finder_window_is_what_grounds_it() {
+    use slingr::store::FollowList;
+
+    let mut list = FollowList::default();
+    let w = finder("9357", "me-tax", "tyto-play-assets");
+
+    assert!(app::absorb(&mut list, &Outcome::Moved { to: "me-tax".into(), created: false }, &w));
+    assert_eq!(list.grounded_ids(), vec!["9357".to_string()]);
+
+    // Slinging it again changes nothing, so nothing is written.
+    assert!(!app::absorb(&mut list, &Outcome::Moved { to: "t-pair".into(), created: false }, &w));
+
+    // "Show this window on all workspaces" lets it roam again.
+    assert!(app::absorb(&mut list, &Outcome::Following { whole_app: false }, &w));
+    assert!(list.grounded_ids().is_empty(), "asking for it everywhere outranks the sling");
+}
+
+#[test]
+fn slinging_an_ordinary_window_grounds_nothing() {
+    use slingr::store::FollowList;
+
+    let mut list = FollowList::default();
+    let w = window("11513", "infra", "Arty Corner Mail");
+    assert!(!app::absorb(&mut list, &Outcome::Moved { to: "t-pair".into(), created: false }, &w));
+    assert!(list.grounded.is_empty());
 }

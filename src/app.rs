@@ -11,21 +11,70 @@ use crate::config::Config;
 use crate::dialog::Prompt;
 use crate::picker::{self, Window, ALL, ALL_APP, NEW, TO_JUMP, TO_MANY, TO_ONE, TO_BOARD};
 
-/// What comes along to every task: named windows, and whole applications.
+/// What comes along to every task: named windows, whole applications, and the
+/// applications that are everywhere by nature — minus anything you have put
+/// somewhere on purpose.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Following<'a> {
     pub windows: &'a [String],
     pub apps: &'a [String],
+    /// Windows that were slung somewhere deliberately, and so stopped being
+    /// global. Only ever holds windows of an application that would otherwise
+    /// follow by nature; asking for a window to be somewhere is a stronger
+    /// statement than a default about its application.
+    pub grounded: &'a [String],
 }
 
 impl Following<'_> {
     pub fn is_empty(&self) -> bool {
-        self.windows.is_empty() && self.apps.is_empty()
+        // Never, while any application is global by nature: one of its windows
+        // may be open even when nothing has been added to the list. Finder
+        // always is, so this is honest rather than pessimistic.
+        picker::GLOBAL_BY_NATURE.is_empty() && self.windows.is_empty() && self.apps.is_empty()
     }
 
     pub fn has(&self, window: &Window) -> bool {
+        // A window you slung is where you asked it to be. That beats anything
+        // its application is by default — but not an explicit "show this one
+        // everywhere", which takes it off the grounded list instead.
+        if self.grounded.iter().any(|id| *id == window.id) {
+            return false;
+        }
         self.windows.iter().any(|id| *id == window.id)
-            || (!window.bundle.is_empty() && self.apps.iter().any(|b| *b == window.bundle))
+            || (!window.bundle.is_empty()
+                && (self.apps.iter().any(|b| *b == window.bundle)
+                    || picker::is_global_by_nature(&window.bundle)))
+    }
+}
+
+/// What an outcome means for the follow list.
+///
+/// Returns whether anything changed, so the caller writes the file only when
+/// it did. It lives here rather than in `main` because the interesting part is
+/// a rule — slinging a window of a globally-natured application is how you say
+/// "not this one" — and a rule in `main` is a rule with no tests.
+pub fn absorb(follow: &mut crate::store::FollowList, outcome: &Outcome, w: &Window) -> bool {
+    match outcome {
+        Outcome::Following { whole_app: true } | Outcome::Unfollowing { whole_app: true } => {
+            follow.toggle_app(&w.bundle, &w.app);
+            true
+        }
+        Outcome::Following { .. } => {
+            follow.toggle(&w.id, &w.app, &w.title);
+            // Asking for this window everywhere outranks having put it
+            // somewhere earlier.
+            follow.unground(&w.id);
+            true
+        }
+        Outcome::Unfollowing { .. } => {
+            follow.toggle(&w.id, &w.app, &w.title);
+            true
+        }
+        // The sling is the whole instruction; there is nothing else to tick.
+        Outcome::Moved { .. } if picker::is_global_by_nature(&w.bundle) => {
+            follow.ground(&w.id, &w.app, &w.title)
+        }
+        _ => false,
     }
 }
 

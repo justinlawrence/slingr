@@ -26,7 +26,28 @@ Two pieces answer this, and they are separate:
 - A **worktree is an attribute of a task**, not the other way round.
 - One **workspace per task**, one **Brave window per task**.
 - Brave is the user; Chrome is for MCP agents.
-- A window belongs to exactly one task. They follow you on **arrival**, never on a sling.
+- A window belongs to exactly one task. Some applications are global **by nature**, without anyone having asked.
+
+Finder is the archetype and, for now, the only one: `picker::GLOBAL_BY_NATURE`
+is a hard-coded list. It opens and closes windows all day, so a window id does
+not survive it; and activating it from the Dock focuses whichever window it
+already has, which drags you to that window's task. Being everywhere by nature
+removes the reason focus leaves.
+
+The exception is a sling. Slinging one of its windows somewhere is how you say
+"not this one" — the window is **grounded**, and stays where you put it. There
+is nothing extra to tick: asking for a window to be in a task is a stronger
+statement than a default about its application. "Show this window on all
+workspaces" lets it roam again.
+
+Grounding is per window and expires with it, which is the right lifetime:
+"leave this Finder window in me-tax" is about the window in front of you, not
+about every Finder window you will ever open.
+
+The shape this wants to grow into is a list in `workspaces.toml` that a person
+can add to. What it must not become is a rule that guesses.
+
+They follow you on **arrival**, never on a sling.
 
 Slinging a window does not move you, so sending the followers after it took
 the terminal, the chat and the mail out of the workspace you were still

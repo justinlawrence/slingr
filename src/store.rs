@@ -167,6 +167,16 @@ pub struct FollowList {
     /// Finder, not about whichever window happens to be open.
     #[serde(default)]
     pub apps: Vec<FollowedApp>,
+    /// Windows of a globally-natured application that were slung somewhere on
+    /// purpose, and so stay there.
+    ///
+    /// Window ids do not survive the application restarting, which is exactly
+    /// why Finder is followed by application rather than by window — so this
+    /// expires with the window. That is the right lifetime: "leave this
+    /// Finder window in me-tax" is a statement about the window in front of
+    /// you, not about every Finder window you will ever open.
+    #[serde(default)]
+    pub grounded: Vec<Follower>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +232,32 @@ impl FollowList {
 
     pub fn contains(&self, id: &str) -> bool {
         self.windows.iter().any(|w| w.id == id)
+    }
+
+    pub fn grounded_ids(&self) -> Vec<String> {
+        self.grounded.iter().map(|w| w.id.clone()).collect()
+    }
+
+    /// Note that a window was put somewhere deliberately. Returns true if that
+    /// changed anything, so the caller only writes the file when it did.
+    pub fn ground(&mut self, id: &str, app: &str, title: &str) -> bool {
+        if self.grounded.iter().any(|w| w.id == id) {
+            return false;
+        }
+        self.grounded.push(Follower {
+            id: id.to_string(),
+            app: app.to_string(),
+            title: title.to_string(),
+        });
+        true
+    }
+
+    /// Let it roam again — what "show this window on all workspaces" means for
+    /// a window that had been pinned down.
+    pub fn unground(&mut self, id: &str) -> bool {
+        let before = self.grounded.len();
+        self.grounded.retain(|w| w.id != id);
+        self.grounded.len() != before
     }
 
     /// Returns true if the window is now following.

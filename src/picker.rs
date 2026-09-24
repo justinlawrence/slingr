@@ -55,6 +55,25 @@ pub const ALL: &str = "∞  all workspaces";
 /// The same, for every window the application has.
 pub const ALL_APP: &str = "__all_app__";
 
+/// Applications that belong everywhere without being asked.
+///
+/// Finder is the archetype. It opens and closes windows all day, so a window
+/// id does not survive it and following a particular window is useless; and
+/// activating it from the Dock focuses whichever window it already has, which
+/// drags you to that window's task. Being everywhere by nature removes the
+/// reason focus leaves — see `docs/FINDINGS.md`.
+///
+/// Hard-coded on purpose, for now. The shape this wants to grow into is a
+/// list in `workspaces.toml` that a person can add to; what it must not
+/// become is a rule that guesses.
+pub const GLOBAL_BY_NATURE: &[&str] = &["com.apple.finder"];
+
+/// Whether an application is one of those, and so follows you without ever
+/// having been added to the follow list.
+pub fn is_global_by_nature(bundle: &str) -> bool {
+    !bundle.is_empty() && GLOBAL_BY_NATURE.contains(&bundle)
+}
+
 /// What the panel sends back when a row is pinned or unpinned rather than
 /// chosen. The list has to be rebuilt afterwards, so it reopens.
 pub const PIN: &str = "__pin__:";

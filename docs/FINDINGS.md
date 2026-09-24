@@ -644,3 +644,44 @@ The consequence is that Ctrl-↑ cannot be made to group by task. It groups by
 Space, it is right to, and there is nothing to configure. Asking macOS for that
 view is the wrong request; drawing it is the right one, which is what the board
 does.
+
+
+## What a herdr tab switch actually costs
+
+Measured with `watch.jsonl`, which now carries a line per `goto` *and* per
+`follow`, each with a count and a duration. Before that neither half left a
+trace, so "it feels like things happen more than once" could only be argued
+about.
+
+Four switches, before any of this was tuned:
+
+```
+goto   t-slingr -> t-video   moved 5   812ms
+follow t-video               moved 0   254ms
+```
+
+The hooks fire **once each**. herdr emits one `tab.focused`, AeroSpace emits
+one workspace change, and there is exactly one `goto` and one `follow` per
+switch. The repetition people see is not the chain running twice — it is five
+windows relocating one after another, which the eye reads as a sequence of
+separate events.
+
+Three things were doing work twice, and are now not:
+
+- `follow` re-listed every window to discover it had nothing to do, because
+  `goto` had already brought the followers a moment earlier in the same
+  process. It now skips that whole pass when `Echo` says the change was ours.
+- `goto` asked AeroSpace three separate times for facts about the focused
+  window — its workspace, its screen, itself. One query carries all three.
+- The layout snapshot was retaken on every workspace change: a full listing
+  and an 8KB write, to record a layout that had usually not moved. Throttled
+  to 90 seconds; `restore` prefers the action log anyway.
+
+Together: about 900ms per switch down to about 660ms, with `follow` falling
+from ~215ms to ~113ms.
+
+What remains is the work itself. Moving one window costs roughly 55ms — a
+process spawn and a round-trip — so a convoy of five is about 275ms of the
+660, and all of the visible movement. **The only lever left on flashing is how
+many windows follow you.** That is why grounding matters: it is the way to
+take a window out of the convoy without giving up the default.

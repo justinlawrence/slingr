@@ -181,7 +181,11 @@ fn sling_in(start: app::Mode) -> Result<()> {
             prompt.as_ref(),
             &cfg,
             &cache.workspaces,
-            app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+            app::Following {
+                windows: &follow.ids(),
+                apps: &follow.bundles(),
+                grounded: &follow.grounded_ids(),
+            },
             &pins.tasks,
         );
         match session {
@@ -202,16 +206,10 @@ fn sling_in(start: app::Mode) -> Result<()> {
 /// Toggle membership of the follow list for whatever the outcome says.
 fn apply_follow(outcome: &Outcome, window: Option<&Window>, follow: &mut FollowList) -> Result<()> {
     let Some(w) = window else { return Ok(()) };
-    match outcome {
-        Outcome::Following { whole_app: true } | Outcome::Unfollowing { whole_app: true } => {
-            follow.toggle_app(&w.bundle, &w.app);
-        }
-        Outcome::Following { .. } | Outcome::Unfollowing { .. } => {
-            follow.toggle(&w.id, &w.app, &w.title);
-        }
-        _ => return Ok(()),
+    if app::absorb(follow, outcome, w) {
+        follow.save()?;
     }
-    follow.save()
+    Ok(())
 }
 
 /// One at a time. herdr has been reported to emit focus events in bursts, and
@@ -272,9 +270,19 @@ fn goto_now() -> Result<()> {
         note(&json!({ "at": store::iso8601(store::now_unix()), "skipped": "already running" }));
         return Ok(());
     };
+    let began = Instant::now();
     let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
     let tab = slingr::herdr::focused();
-    let here = aero.focused_workspace().unwrap_or_default();
+    // One query where there were three. The focused window already carries the
+    // workspace it is in and the screen it is on, and asking AeroSpace
+    // separately for each is three process spawns on the path of every tab
+    // switch. An empty workspace has no focused window, so that case still has
+    // to ask — which is the reason the direct query exists at all.
+    let focused = aero.focused_window();
+    let here = match &focused {
+        Some(w) => w.workspace.clone(),
+        None => aero.focused_workspace().unwrap_or_default(),
+    };
 
     // No window counts: an empty task is somewhere to go, so nothing here
     // needs to know how full anything is. Listing every window on the hot
@@ -296,17 +304,26 @@ fn goto_now() -> Result<()> {
             // notification — and every switch afterwards faithfully hands
             // focus back to it. A follower is with you by design; anything
             // else is a coincidence.
-            let hands_on = aero.focused_window().filter(|w| {
-                follow.ids().contains(&w.id) || follow.follows_app(&w.bundle)
+            let hands_on = focused.clone().filter(|w| {
+                follow.ids().contains(&w.id)
+                    || follow.follows_app(&w.bundle)
+                    || slingr::picker::is_global_by_nature(&w.bundle)
             });
 
             // Bring the followers before switching, not after. AeroSpace runs
             // `follow` on the change as well, but doing it here means one
             // visible rearrangement instead of two.
-            let on = aero.focused_monitor();
+            let on = match &focused {
+                Some(w) => Some(w.monitor.clone()),
+                None => aero.focused_monitor(),
+            };
             let brought = app::follow_to(
                 &aero,
-                app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+                app::Following {
+                windows: &follow.ids(),
+                apps: &follow.bundles(),
+                grounded: &follow.grounded_ids(),
+            },
                 &target,
                 "",
                 None,
@@ -348,6 +365,10 @@ fn goto_now() -> Result<()> {
                 "at": store::iso8601(store::now_unix()),
                 "goto": target, "from": here,
                 "kept_focus": hands_kept,
+                // How many windows were rearranged before the switch became
+                // visible. This is what a "flash" is made of.
+                "brought": brought.len(),
+                "ms": began.elapsed().as_millis(),
             }));
         }
         Action::Hold(why) => {
@@ -372,26 +393,48 @@ fn note(entry: &serde_json::Value) {
 fn follow_now() -> Result<()> {
     use slingr::aerospace::WindowManager;
 
+    // `goto` has left a line per switch since the beginning; this one left
+    // none, so "it feels like things happen more than once" could only be
+    // argued about. One line per run says how many times AeroSpace actually
+    // fired the hook, and what each run cost.
+    let began = Instant::now();
     let aero = AeroSpace::default();
     let follow = FollowList::load();
     let Some(here) = aero.focused_workspace() else {
         say!("AeroSpace did not answer");
         return Ok(());
     };
-    // Only the screen being worked on. Clicking a window on another display
-    // must not pull everything across to it.
-    let on = aero.focused_monitor();
-    let brought = app::follow_to(
-        &aero,
-        app::Following { windows: &follow.ids(), apps: &follow.bundles() },
-        &here,
-        "",
-        None,
-        on.as_deref(),
-    );
-    if !brought.is_empty() {
-        say!("brought {} to {here}", brought.len());
-    }
+    // When our own `goto` caused this change, the followers were brought a
+    // moment ago — by the same process, before the switch was even visible.
+    // Asking AeroSpace for all forty-odd windows again, to discover there is
+    // nothing left to do, was half the work of a tab switch done twice.
+    //
+    // A follower that refused to move is not retried here; it is picked up by
+    // the next change that was not ours.
+    let ours = store::Echo::was_ours(&here);
+    let moved = if ours {
+        0
+    } else {
+        // Only the screen being worked on. Clicking a window on another
+        // display must not pull everything across to it.
+        let on = aero.focused_monitor();
+        let brought = app::follow_to(
+            &aero,
+            app::Following {
+                windows: &follow.ids(),
+                apps: &follow.bundles(),
+                grounded: &follow.grounded_ids(),
+            },
+            &here,
+            "",
+            None,
+            on.as_deref(),
+        );
+        if !brought.is_empty() {
+            say!("brought {} to {here}", brought.len());
+        }
+        brought.len()
+    };
 
     // The other half of the pairing. A task is a herdr tab and a workspace, so
     // arriving at the workspace should bring the tab with it — whether you got
@@ -402,7 +445,7 @@ fn follow_now() -> Result<()> {
     // correct and stops there.
     // Unless we are the reason it changed. Reporting our own switch back to
     // herdr is what makes the pair chase each other.
-    if !store::Echo::was_ours(&here) {
+    if !ours {
         if let Some(tab) = slingr::herdr::tab_named(&here) {
             if !tab.focused && slingr::herdr::focus_tab(&tab.id) {
                 say!("herdr -> {here}");
@@ -410,7 +453,23 @@ fn follow_now() -> Result<()> {
         }
     }
 
-    let _ = snapshot();
+    // A snapshot is for putting things back after a restart, so it only has to
+    // be roughly current. Taken on every workspace change it costs a full
+    // window listing and an 8KB write on the hot path — about a fifth of a tab
+    // switch — to write down a layout that has usually not moved since the
+    // last one. `restore` prefers the action log anyway, which records intent
+    // and is written the moment anything is slung.
+    let snapped = if snapshot_is_stale() { snapshot().unwrap_or(0) } else { 0 };
+    note(&json!({
+        "at": store::iso8601(store::now_unix()),
+        "follow": here,
+        "snapped": snapped,
+        "brought": moved,
+        // True when this run is the tail of our own `goto` rather than a
+        // change someone else caused.
+        "after_our_goto": ours,
+        "ms": began.elapsed().as_millis(),
+    }));
     Ok(())
 }
 
@@ -418,8 +477,14 @@ fn list_following(prune: bool) -> Result<()> {
     use slingr::aerospace::WindowManager;
 
     let mut follow = FollowList::load();
-    if follow.windows.is_empty() && follow.apps.is_empty() {
-        say!("nothing follows you yet — pick \"all workspaces\" in the picker");
+
+    // These follow without anyone having asked, so they belong at the top of
+    // the answer to "what follows me" even though they are in no file.
+    for bundle in slingr::picker::GLOBAL_BY_NATURE {
+        say!("  always {bundle}  (global by nature — sling one to leave it behind)");
+    }
+    if follow.windows.is_empty() && follow.apps.is_empty() && follow.grounded.is_empty() {
+        say!("  nothing else follows you yet — pick \"all workspaces\" in the picker");
         return Ok(());
     }
 
@@ -450,8 +515,25 @@ fn list_following(prune: bool) -> Result<()> {
         );
     }
 
+    let mut grounded_stale = 0;
+    for w in &follow.grounded {
+        let gone = !live.is_empty() && !live.contains(&w.id);
+        if gone {
+            grounded_stale += 1;
+        }
+        say!(
+            "  {} [{}] {} — {}  (slung, so it stays put)",
+            if gone { "gone" } else { "    " },
+            w.id,
+            w.app,
+            w.title
+        );
+    }
+    stale += grounded_stale;
+
     if stale > 0 && prune {
         follow.windows.retain(|w| live.contains(&w.id));
+        follow.grounded.retain(|w| live.contains(&w.id));
         follow.save()?;
         say!("\nforgot {stale} whose window no longer exists");
     } else if stale > 0 {
@@ -591,7 +673,11 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
                     let on = aero.focused_monitor();
                     app::follow_to(
                         &aero,
-                        app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+                        app::Following {
+                windows: &follow.ids(),
+                apps: &follow.bundles(),
+                grounded: &follow.grounded_ids(),
+            },
                         &workspace,
                         "",
                         None,
@@ -687,7 +773,11 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
                 let on = aero.focused_monitor();
                 let brought = app::follow_to(
                     aero,
-                    app::Following { windows: &follow.ids(), apps: &follow.bundles() },
+                    app::Following {
+                windows: &follow.ids(),
+                apps: &follow.bundles(),
+                grounded: &follow.grounded_ids(),
+            },
                     &target,
                     "",
                     Some(&here),
@@ -794,6 +884,19 @@ fn sync_workspaces(loud: bool) -> Result<()> {
 }
 
 /// Write down where everything is. Cheap enough to do after every change.
+/// How old the layout may get before a workspace change bothers to retake it.
+const SNAPSHOT_EVERY: Duration = Duration::from_secs(90);
+
+fn snapshot_is_stale() -> bool {
+    let Ok(meta) = std::fs::metadata(store::state_dir().join("layout.json")) else {
+        return true;
+    };
+    meta.modified()
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_none_or(|age| age >= SNAPSHOT_EVERY)
+}
+
 fn snapshot() -> Result<usize> {
     use slingr::aerospace::WindowManager;
 
