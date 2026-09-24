@@ -154,6 +154,9 @@ struct Type {
     var title: Font { .system(size: 16 * scale, weight: .bold, design: .monospaced) }
     var tab: Font { sf(13, .medium) }
     var rowName: Font { sf(14, .medium) }
+    /// The window being slung. The only thing in the header now, so it carries
+    /// the weight the application's name used to.
+    var subject: Font { sf(15, .semibold) }
     /// Tabular, so counts in a column line up on their digits rather than
     /// drifting with the width of a 1.
     var bigNumber: Font { .system(size: 19 * scale, weight: .semibold).monospacedDigit() }
@@ -475,16 +478,16 @@ struct PanelView: View {
                     if let icon = Icons.forBundle(subject.bundle) {
                         Image(nsImage: icon)
                             .resizable()
-                            .frame(width: 20 * picker.scale, height: 20 * picker.scale)
+                            .frame(width: 22 * picker.scale, height: 22 * picker.scale)
                     }
-                    Text(subject.label).font(type.rowName).foregroundStyle(ink.text)
-                    if let title = subject.detail, !title.isEmpty {
-                        Text(title)
-                            .font(type.body)
-                            .foregroundStyle(ink.dim)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
+                    // The window's own words and nothing else. The icon has
+                    // already said which application it belongs to, and Rust
+                    // has taken the browser's name off the end of the title.
+                    Text(subject.label)
+                        .font(type.subject)
+                        .foregroundStyle(ink.text)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Spacer(minLength: 0)
                 }
             }

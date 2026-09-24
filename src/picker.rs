@@ -205,6 +205,50 @@ pub fn occupancy_from<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)>) -> BT
         .collect()
 }
 
+/// The tab's own title, with the browser's furniture taken off the end.
+///
+/// Chromium writes `<tab title> - <Browser> – <profile>` into the window
+/// title, so every browser row in the list ends with the same thirty
+/// characters — which is precisely the part that distinguishes nothing. The
+/// application's icon already says which browser it is, and the profile says
+/// less than that.
+///
+/// Only removed when the name in the suffix is the application's own, so a
+/// page genuinely called "Something - Else – Other" keeps its title.
+pub fn tab_title(app: &str, title: &str) -> String {
+    let trimmed = strip_memory_note(strip_browser_suffix(app, title)).trim();
+    // Never strip a title down to nothing; a row with no words is worse than
+    // one with the browser's name on it.
+    if trimmed.is_empty() { title.trim().to_string() } else { trimmed.to_string() }
+}
+
+/// `… - Brave – justin@example.com` → `…`
+///
+/// The separator before the profile is an en dash and the one before the
+/// browser is a hyphen. That asymmetry is Chromium's, and it is what makes
+/// this safe to do by string: an em dash in a document title (`wp.dump —
+/// wp.dump`) does not match.
+fn strip_browser_suffix<'a>(app: &str, title: &'a str) -> &'a str {
+    let Some((before_profile, _)) = title.rsplit_once(" \u{2013} ") else { return title };
+    let Some((tab, browser)) = before_profile.rsplit_once(" - ") else { return title };
+    if browser.is_empty() || !app.starts_with(browser) {
+        return title;
+    }
+    tab
+}
+
+/// `My Tasks - High memory usage - 1.4 GB` → `My Tasks`
+///
+/// Chromium appends this to a heavy tab's title, and the figure climbs while
+/// you work — so the same window reads differently every time the picker
+/// opens, which is the one thing a title must not do.
+fn strip_memory_note(title: &str) -> &str {
+    match title.rsplit_once(" - High memory usage - ") {
+        Some((before, size)) if size.ends_with('B') => before,
+        _ => title,
+    }
+}
+
 /// Coerce a typed name into something AeroSpace will accept.
 ///
 /// A `/` in a workspace name hangs AeroSpace on a modal dialog it never shows,
@@ -324,12 +368,21 @@ pub fn build_window_menu(
     let mut order: Vec<String> = groups.keys().cloned().collect();
     order.sort_by_key(|w| (w != first, w.clone()));
 
+    // What each row will actually say. Worked out before anything is drawn,
+    // because two titles that differ only in the part being stripped — the
+    // memory figure, say — become the same row once stripped.
+    let shown_as = |w: &Window| {
+        if w.title.is_empty() { w.app.clone() } else { tab_title(&w.app, &w.title) }
+    };
+
     // Windows that share a label get their id shown, and only those: several
     // browser windows routinely carry the same title, and without this there
-    // is no way to tell which row is which.
+    // is no way to tell which row is which. Counted on the shown name rather
+    // than the raw one, or the disambiguation goes missing exactly where it
+    // is needed.
     let mut times_seen: BTreeMap<String, usize> = BTreeMap::new();
     for w in windows {
-        *times_seen.entry(w.label()).or_default() += 1;
+        *times_seen.entry(format!("{}|{}", w.app, shown_as(w))).or_default() += 1;
     }
 
     let mut items = Vec::new();
@@ -344,9 +397,10 @@ pub fn build_window_menu(
             index += 1;
             // The icon says which application it is, so the row only has to
             // say which window — browser titles are long enough already.
-            let name = if w.title.is_empty() { w.app.clone() } else { w.title.clone() };
+            let name = shown_as(w);
             let label = shorten(&name, 64);
-            let shown = if times_seen.get(&w.label()).copied().unwrap_or(0) > 1 {
+            let key = format!("{}|{}", w.app, name);
+            let shown = if times_seen.get(&key).copied().unwrap_or(0) > 1 {
                 format!("{label}  [{}]", w.id)
             } else {
                 label
@@ -427,14 +481,19 @@ impl Row {
         Self { marker: Some("tab".into()), active, ..Self::action(id, label) }
     }
 
-    /// What is being slung. Drawn in the header by a front end that can show
-    /// an icon, and listed as a plain line by one that cannot.
+    /// What is being slung: its icon and what the window actually says it is.
+    ///
+    /// The application's name used to lead the header, with the title trailing
+    /// after it in grey. But the icon already says "Brave", twice over, and
+    /// the thing being identified is the *window* — so the title leads and the
+    /// name is gone. An untitled window falls back to the application, which
+    /// is then the only thing there is to say.
     pub fn subject(app: &str, title: &str, bundle: &str) -> Self {
+        let name = if title.is_empty() { app.to_string() } else { tab_title(app, title) };
         Self {
             marker: Some("subject".into()),
-            detail: (!title.is_empty()).then(|| shorten(title, 72)),
             bundle: Some(bundle.to_string()),
-            ..Self::action("__subject__", app)
+            ..Self::action("__subject__", &shorten(&name, 72))
         }
     }
 
@@ -654,6 +713,99 @@ mod tests {
     const GHOSTTY: &str = "com.mitchellh.ghostty";
     const ZED: &str = "dev.zed.Zed";
     const OFFICE: &str = "org.libreoffice.script";
+
+    #[test]
+    fn a_browser_row_says_what_the_tab_says() {
+        assert_eq!(
+            tab_title(
+                "Brave Browser",
+                "easyJet | Flights & holidays ✈️ Book low-cost airline tickets - Brave – justinl@example.com"
+            ),
+            "easyJet | Flights & holidays ✈️ Book low-cost airline tickets"
+        );
+        assert_eq!(
+            tab_title("Google Chrome", "My Tasks - Google Chrome – Justin (example.uk)"),
+            "My Tasks"
+        );
+        // A hyphen inside the tab's own title survives; only the last one, the
+        // one before the browser's name, is furniture.
+        assert_eq!(
+            tab_title("Brave Browser", "Shared-Christy-Justin - Dropbox - Brave – jl@example.com"),
+            "Shared-Christy-Justin - Dropbox"
+        );
+    }
+
+    #[test]
+    fn the_memory_warning_chromium_bolts_on_is_not_part_of_the_title() {
+        // The figure climbs while you work, so the same window reads
+        // differently every time the picker opens.
+        assert_eq!(
+            tab_title("Brave Browser", "My Tasks - High memory usage - 1.4 GB - Brave – justinl@example.com"),
+            "My Tasks"
+        );
+        assert_eq!(
+            tab_title(
+                "Brave Browser",
+                "Inbox (586) - justin@example.uk - Example Mail - High memory usage - 800 MB - Brave – justin@example.uk"
+            ),
+            "Inbox (586) - justin@example.uk - Example Mail"
+        );
+    }
+
+    #[test]
+    fn a_title_that_is_not_a_browsers_is_left_exactly_alone() {
+        // Zed uses an em dash, Chromium an en dash. That is the whole
+        // difference, and it is what keeps this safe to do by string.
+        assert_eq!(tab_title("Zed", "wp.dump — wp.dump"), "wp.dump — wp.dump");
+        assert_eq!(tab_title("Ghostty", "MacBook-Pro.local: tyto"), "MacBook-Pro.local: tyto");
+        assert_eq!(
+            tab_title("LibreOffice", "Lawrence_Studios_2025_calendar_year.xlsx"),
+            "Lawrence_Studios_2025_calendar_year.xlsx"
+        );
+        // The suffix names an application that is not this one, so it stays.
+        assert_eq!(
+            tab_title("Brave Browser", "Reading about Safari - Safari – someone"),
+            "Reading about Safari - Safari – someone"
+        );
+    }
+
+    #[test]
+    fn the_subject_leads_with_the_window_not_the_application() {
+        let row = Row::subject("Brave Browser", "Arty Vitals - Brave – justinl@example.com", BRAVE);
+        assert_eq!(row.label, "Arty Vitals");
+        assert_eq!(row.detail, None, "the application's name is the icon's job");
+
+        // Nothing to say about the window but which application it is.
+        let bare = Row::subject("‎WhatsApp", "", "net.whatsapp.WhatsApp");
+        assert_eq!(bare.label, "‎WhatsApp");
+    }
+
+    #[test]
+    fn two_windows_left_alike_by_stripping_still_show_their_ids() {
+        // Both are "My Tasks" once the memory figure goes. Without counting on
+        // the shown name the ids would be dropped exactly where they matter.
+        let windows = vec![
+            Window {
+                id: "239".into(),
+                workspace: "1".into(),
+                monitor: "1".into(),
+                app: "Brave Browser".into(),
+                bundle: BRAVE.into(),
+                title: "My Tasks - High memory usage - 1.4 GB - Brave – a@b.c".into(),
+            },
+            Window {
+                id: "4126".into(),
+                workspace: "1".into(),
+                monitor: "1".into(),
+                app: "Brave Browser".into(),
+                bundle: BRAVE.into(),
+                title: "My Tasks - High memory usage - 972 MB - Brave – a@b.c".into(),
+            },
+        ];
+        let menu = build_window_menu(&windows, "1", |_| false);
+        let labels: Vec<&str> = menu.rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["My Tasks  [239]", "My Tasks  [4126]"]);
+    }
 
     #[test]
     fn the_stack_leads_with_the_application_that_is_unusual_here() {
