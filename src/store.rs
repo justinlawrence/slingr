@@ -499,17 +499,78 @@ impl Echo {
         let _ = fs::write(Self::path(), format!("{} {}", now_unix(), workspace));
     }
 
-    /// True if this workspace was reached by sling within the last couple of
-    /// seconds. Short on purpose: it exists to swallow one echo, not to
-    /// suppress anything a person did.
-    pub fn was_ours(workspace: &str) -> bool {
-        let Ok(text) = fs::read_to_string(Self::path()) else {
-            return false;
-        };
-        let Some((at, ws)) = text.trim().split_once(' ') else {
-            return false;
-        };
-        let Ok(at) = at.parse::<i64>() else { return false };
-        ws == workspace && now_unix().saturating_sub(at) <= 2
+    /// What our own last switch says about a change we are now being told
+    /// about.
+    pub fn settling(workspace: &str) -> Settling {
+        let said = fs::read_to_string(Self::path()).ok().and_then(|text| {
+            let (at, ws) = text.trim().split_once(' ')?;
+            Some((at.parse::<i64>().ok()?, ws.to_string()))
+        });
+        settling_from(said.as_ref().map(|(at, ws)| (*at, ws.as_str())), now_unix(), workspace)
+    }
+}
+
+/// How a workspace change relates to one sling asked for a moment ago.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settling {
+    /// The change we asked for, arriving. The followers were already brought
+    /// and herdr already knows, so there is nothing left to do.
+    Ours,
+    /// A switch of ours is still in flight, and this is not where it lands.
+    ///
+    /// AeroSpace reports the workspace it is on when the hook fires, which
+    /// during a switch can still be the one being left. Acting on that is how
+    /// slingr came to drag people backwards: it read the old workspace, found
+    /// the name did not match what it had just asked for, concluded a person
+    /// must have done it, moved every follower back and told herdr to focus
+    /// the tab it had just left — which fired another switch.
+    InFlight,
+    /// Nothing of ours is outstanding, so somebody moved and we should follow.
+    Settled,
+}
+
+/// The rule, with the clock and the file taken out so it can be tested.
+///
+/// Two seconds is short on purpose: it exists to swallow the echo of one
+/// switch, not to suppress anything a person did.
+pub fn settling_from(said: Option<(i64, &str)>, now: i64, workspace: &str) -> Settling {
+    let Some((at, target)) = said else { return Settling::Settled };
+    if now.saturating_sub(at) > 2 {
+        return Settling::Settled;
+    }
+    if target == workspace {
+        Settling::Ours
+    } else {
+        Settling::InFlight
+    }
+}
+
+#[cfg(test)]
+mod echo_tests {
+    use super::{settling_from, Settling};
+
+    #[test]
+    fn the_change_we_asked_for_needs_nothing_doing() {
+        assert_eq!(settling_from(Some((100, "ac-app")), 100, "ac-app"), Settling::Ours);
+    }
+
+    #[test]
+    fn a_workspace_reported_mid_switch_is_not_somebody_moving() {
+        // Observed: goto went t-android -> ac-app, and the hook fired saying
+        // "t-android". Reading that as a person's doing sent seven followers
+        // back and told herdr to focus the tab just left, which fired another
+        // switch — the bounce that looked like flashing.
+        assert_eq!(settling_from(Some((100, "ac-app")), 101, "t-android"), Settling::InFlight);
+    }
+
+    #[test]
+    fn once_our_switch_has_had_its_moment_everything_is_somebody_moving() {
+        assert_eq!(settling_from(Some((100, "ac-app")), 103, "t-android"), Settling::Settled);
+        assert_eq!(settling_from(Some((100, "ac-app")), 103, "ac-app"), Settling::Settled);
+    }
+
+    #[test]
+    fn nothing_of_ours_outstanding_means_follow_along() {
+        assert_eq!(settling_from(None, 100, "ac-app"), Settling::Settled);
     }
 }

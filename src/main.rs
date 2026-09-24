@@ -270,115 +270,128 @@ fn goto_now() -> Result<()> {
         note(&json!({ "at": store::iso8601(store::now_unix()), "skipped": "already running" }));
         return Ok(());
     };
-    let began = Instant::now();
     let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
-    let tab = slingr::herdr::focused();
-    // One query where there were three. The focused window already carries the
-    // workspace it is in and the screen it is on, and asking AeroSpace
-    // separately for each is three process spawns on the path of every tab
-    // switch. An empty workspace has no focused window, so that case still has
-    // to ask — which is the reason the direct query exists at all.
-    let focused = aero.focused_window();
-    let here = match &focused {
-        Some(w) => w.workspace.clone(),
-        None => aero.focused_workspace().unwrap_or_default(),
-    };
+    // At most twice: one look, and one more if the tab moved on while we
+    // were switching. Bounded so a tab that keeps changing cannot spin.
+    for _ in 0..2 {
+        let began = Instant::now();
+        let tab = slingr::herdr::focused();
+        // One query where there were three. The focused window already carries the
+        // workspace it is in and the screen it is on, and asking AeroSpace
+        // separately for each is three process spawns on the path of every tab
+        // switch. An empty workspace has no focused window, so that case still has
+        // to ask — which is the reason the direct query exists at all.
+        let focused = aero.focused_window();
+        let here = match &focused {
+            Some(w) => w.workspace.clone(),
+            None => aero.focused_workspace().unwrap_or_default(),
+        };
 
-    // No window counts: an empty task is somewhere to go, so nothing here
-    // needs to know how full anything is. Listing every window on the hot
-    // path is what made this feel slow.
-    let counts = std::collections::BTreeMap::new();
+        // No window counts: an empty task is somewhere to go, so nothing here
+        // needs to know how full anything is. Listing every window on the hot
+        // path is what made this feel slow.
+        let counts = std::collections::BTreeMap::new();
 
-    // No settling to wait for: the hook fires once per actual focus change,
-    // so the tab has already stopped moving by the time we are called.
-    match decide(tab.as_deref(), tab.as_deref(), &here, &counts) {
-        Action::Switch(target) => {
-            let follow = FollowList::load();
+        // No settling to wait for: the hook fires once per actual focus change,
+        // so the tab has already stopped moving by the time we are called.
+        match decide(tab.as_deref(), tab.as_deref(), &here, &counts) {
+            Action::Switch(target) => {
+                let follow = FollowList::load();
 
-            // Whatever you are typing in — normally the terminal herdr itself
-            // runs in, since changing a tab is what got us here.
-            //
-            // Only a window that follows you counts. Preserving whatever
-            // happens to hold focus sounds more general and is worse: let
-            // anything else grab focus once — an app raising itself, a
-            // notification — and every switch afterwards faithfully hands
-            // focus back to it. A follower is with you by design; anything
-            // else is a coincidence.
-            let hands_on = focused.clone().filter(|w| {
-                follow.ids().contains(&w.id)
-                    || follow.follows_app(&w.bundle)
-                    || slingr::picker::is_global_by_nature(&w.bundle)
-            });
+                // Whatever you are typing in — normally the terminal herdr itself
+                // runs in, since changing a tab is what got us here.
+                //
+                // Only a window that follows you counts. Preserving whatever
+                // happens to hold focus sounds more general and is worse: let
+                // anything else grab focus once — an app raising itself, a
+                // notification — and every switch afterwards faithfully hands
+                // focus back to it. A follower is with you by design; anything
+                // else is a coincidence.
+                let hands_on = focused.clone().filter(|w| {
+                    follow.ids().contains(&w.id)
+                        || follow.follows_app(&w.bundle)
+                        || slingr::picker::is_global_by_nature(&w.bundle)
+                });
 
-            // Bring the followers before switching, not after. AeroSpace runs
-            // `follow` on the change as well, but doing it here means one
-            // visible rearrangement instead of two.
-            let on = match &focused {
-                Some(w) => Some(w.monitor.clone()),
-                None => aero.focused_monitor(),
-            };
-            let brought = app::follow_to(
-                &aero,
-                app::Following {
-                windows: &follow.ids(),
-                apps: &follow.bundles(),
-                grounded: &follow.grounded_ids(),
-            },
-                &target,
-                "",
-                None,
-                on.as_deref(),
-            );
+                // Bring the followers before switching, not after. AeroSpace runs
+                // `follow` on the change as well, but doing it here means one
+                // visible rearrangement instead of two.
+                let on = match &focused {
+                    Some(w) => Some(w.monitor.clone()),
+                    None => aero.focused_monitor(),
+                };
+                let brought = app::follow_to(
+                    &aero,
+                    app::Following {
+                    windows: &follow.ids(),
+                    apps: &follow.bundles(),
+                    grounded: &follow.grounded_ids(),
+                },
+                    &target,
+                    "",
+                    None,
+                    on.as_deref(),
+                );
 
-            // Arrive by focusing the window you are typing in, rather than by
-            // asking for the workspace and then correcting the focus it chose.
-            // Focusing a window goes to its workspace, so this is one
-            // operation with no window in between — and nothing to race with
-            // the callback AeroSpace fires on the change.
-            //
-            // Asking for the workspace focuses whatever the destination
-            // happened to hold. That is right when you asked for a workspace,
-            // and wrong when you asked for a herdr tab: it takes the keyboard
-            // out from under you, and the next tab click is spent getting it
-            // back.
-            // Read off what was just moved rather than asking again. The
-            // window came along if it was carried, or was already there.
-            let came_along = hands_on.as_ref().is_some_and(|w| {
-                w.workspace == target
-                    || brought.iter().any(|(moved, outcome)| {
-                        moved.id == w.id && matches!(outcome, Outcome::Moved { .. })
-                    })
-            });
-            // Said before the switch, so the callback it triggers can see it.
-            store::Echo::say(&target);
-            let hands_kept = matches!((came_along, &hands_on), (true, Some(_)));
-            match (came_along, hands_on) {
-                (true, Some(w)) => {
-                    aero.focus(&w.id);
+                // Arrive by focusing the window you are typing in, rather than by
+                // asking for the workspace and then correcting the focus it chose.
+                // Focusing a window goes to its workspace, so this is one
+                // operation with no window in between — and nothing to race with
+                // the callback AeroSpace fires on the change.
+                //
+                // Asking for the workspace focuses whatever the destination
+                // happened to hold. That is right when you asked for a workspace,
+                // and wrong when you asked for a herdr tab: it takes the keyboard
+                // out from under you, and the next tab click is spent getting it
+                // back.
+                // Read off what was just moved rather than asking again. The
+                // window came along if it was carried, or was already there.
+                let came_along = hands_on.as_ref().is_some_and(|w| {
+                    w.workspace == target
+                        || brought.iter().any(|(moved, outcome)| {
+                            moved.id == w.id && matches!(outcome, Outcome::Moved { .. })
+                        })
+                });
+                // Said before the switch, so the callback it triggers can see it.
+                store::Echo::say(&target);
+                let hands_kept = matches!((came_along, &hands_on), (true, Some(_)));
+                match (came_along, hands_on) {
+                    (true, Some(w)) => {
+                        aero.focus(&w.id);
+                    }
+                    _ => {
+                        aero.focus_workspace(&target);
+                    }
                 }
-                _ => {
-                    aero.focus_workspace(&target);
+                say!("{here} -> {target}");
+                note(&json!({
+                    "at": store::iso8601(store::now_unix()),
+                    "goto": target, "from": here,
+                    "kept_focus": hands_kept,
+                    // How many windows were rearranged before the switch became
+                    // visible. This is what a "flash" is made of.
+                    "brought": brought.len(),
+                    "ms": began.elapsed().as_millis(),
+                }));
+                // A tab clicked while this switch was in flight was turned
+                // away by the lock above, so without looking again the
+                // earlier — and by now staler — intent wins: two quick taps
+                // land you on the first. Re-reading herdr is a socket
+                // round-trip, not a process.
+                if !slingr::watch::look_again(&target, slingr::herdr::focused().as_deref()) {
+                    break;
                 }
             }
-            say!("{here} -> {target}");
-            note(&json!({
-                "at": store::iso8601(store::now_unix()),
-                "goto": target, "from": here,
-                "kept_focus": hands_kept,
-                // How many windows were rearranged before the switch became
-                // visible. This is what a "flash" is made of.
-                "brought": brought.len(),
-                "ms": began.elapsed().as_millis(),
-            }));
-        }
-        Action::Hold(why) => {
-            if let Some(t) = &tab {
-                say!("holding: {why} ({t})");
+            Action::Hold(why) => {
+                if let Some(t) = &tab {
+                    say!("holding: {why} ({t})");
+                }
+                note(&json!({
+                    "at": store::iso8601(store::now_unix()),
+                    "hold": why, "tab": tab, "from": here,
+                }));
+                break;
             }
-            note(&json!({
-                "at": store::iso8601(store::now_unix()),
-                "hold": why, "tab": tab, "from": here,
-            }));
         }
     }
     Ok(())
@@ -397,6 +410,16 @@ fn follow_now() -> Result<()> {
     // none, so "it feels like things happen more than once" could only be
     // argued about. One line per run says how many times AeroSpace actually
     // fired the hook, and what each run cost.
+    // Two of these running at once move the same windows twice, in a race,
+    // each undoing part of what the other just did. Measured: two concurrent
+    // runs moving seven windows apiece, which is most of what "flashing" is.
+    // `goto` has had this lock since the beginning; this had none.
+    let held = only_one("follow");
+    let mut catch = slingr::watch::catch(held.is_none(), store::Settling::Settled);
+    if catch == slingr::watch::Catch::Busy {
+        note(&json!({ "at": store::iso8601(store::now_unix()), "skipped": "follow already running" }));
+        return Ok(());
+    }
     let began = Instant::now();
     let aero = AeroSpace::default();
     let follow = FollowList::load();
@@ -409,10 +432,22 @@ fn follow_now() -> Result<()> {
     // Asking AeroSpace for all forty-odd windows again, to discover there is
     // nothing left to do, was half the work of a tab switch done twice.
     //
+    // And when a switch of ours is still in flight, the workspace AeroSpace
+    // reports may be the one being *left*. Neither moving followers there nor
+    // telling herdr about it is right; the settled state will arrive by
+    // itself.
+    //
     // A follower that refused to move is not retried here; it is picked up by
     // the next change that was not ours.
-    let ours = store::Echo::was_ours(&here);
-    let moved = if ours {
+    catch = slingr::watch::catch(false, store::Echo::settling(&here));
+    if catch == slingr::watch::Catch::MidSwitch {
+        note(&json!({
+            "at": store::iso8601(store::now_unix()),
+            "skipped": "mid-switch", "reported": here,
+        }));
+        return Ok(());
+    }
+    let moved = if !catch.brings_followers() {
         0
     } else {
         // Only the screen being worked on. Clicking a window on another
@@ -445,7 +480,7 @@ fn follow_now() -> Result<()> {
     // correct and stops there.
     // Unless we are the reason it changed. Reporting our own switch back to
     // herdr is what makes the pair chase each other.
-    if !ours {
+    if catch.moves_the_tab() {
         if let Some(tab) = slingr::herdr::tab_named(&here) {
             if !tab.focused && slingr::herdr::focus_tab(&tab.id) {
                 say!("herdr -> {here}");
@@ -465,9 +500,7 @@ fn follow_now() -> Result<()> {
         "follow": here,
         "snapped": snapped,
         "brought": moved,
-        // True when this run is the tail of our own `goto` rather than a
-        // change someone else caused.
-        "after_our_goto": ours,
+        "catch": format!("{catch:?}"),
         "ms": began.elapsed().as_millis(),
     }));
     Ok(())

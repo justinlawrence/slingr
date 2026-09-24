@@ -51,6 +51,66 @@ pub fn is_tab_focused(line: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// What a workspace change asks of the follow hook.
+///
+/// Every value here is a bug that happened. The hook used to do the same work
+/// whatever caused the change, and each of these is a case where that was
+/// wrong — see `docs/FINDINGS.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Catch {
+    /// Another run of the hook is already in flight. Two at once move the same
+    /// windows twice, in a race, each undoing part of what the other did.
+    Busy,
+    /// A switch of ours is still settling and this is not where it lands.
+    /// AeroSpace reports the workspace it is on when the hook fires, which
+    /// during a switch can still be the one being left.
+    MidSwitch,
+    /// Our own switch arriving. `goto` brought the followers before it moved,
+    /// and herdr is where the change came from, so there is nothing to do but
+    /// note it.
+    Arrived,
+    /// Somebody moved by some other means. Bring the followers across, and
+    /// bring herdr's tab with them.
+    Chase,
+}
+
+/// The rule, with the lock file and the clock taken out.
+pub fn catch(another_is_running: bool, settling: crate::store::Settling) -> Catch {
+    if another_is_running {
+        return Catch::Busy;
+    }
+    match settling {
+        crate::store::Settling::InFlight => Catch::MidSwitch,
+        crate::store::Settling::Ours => Catch::Arrived,
+        crate::store::Settling::Settled => Catch::Chase,
+    }
+}
+
+impl Catch {
+    /// Only one of the four does anything to your windows.
+    pub fn brings_followers(self) -> bool {
+        self == Catch::Chase
+    }
+
+    /// And only that one may push herdr around. Doing it in any other state is
+    /// how slingr came to drag people backwards: it read the workspace being
+    /// left, decided a person must have gone there, and focused the tab it had
+    /// just come from — which fired another switch.
+    pub fn moves_the_tab(self) -> bool {
+        self == Catch::Chase
+    }
+}
+
+/// Whether a switch that has just landed should look again before letting go
+/// of the lock.
+///
+/// A tab clicked while the first switch was in flight is turned away by that
+/// lock, so without a second look the earlier — and by then staler — intent
+/// wins: you tap two tabs quickly and land on the one you did not choose last.
+pub fn look_again(went_to: &str, tab_now: Option<&str>) -> bool {
+    matches!(tab_now, Some(now) if now != went_to)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Why nothing happened. Worth carrying: in a watcher that mostly
@@ -160,5 +220,65 @@ mod tests {
     #[test]
     fn does_nothing_without_a_focused_tab() {
         assert_eq!(decide(None, None, "infra", &counts(&[])), Action::Hold("no focused herdr tab"));
+    }
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::{catch, look_again, Catch};
+    use crate::store::Settling;
+
+    #[test]
+    fn an_ordinary_tab_switch_asks_the_hook_for_nothing() {
+        // goto brought the followers before it moved and herdr is where the
+        // change came from. Measured: this path used to re-list every window
+        // to discover it had nothing to do.
+        let c = catch(false, Settling::Ours);
+        assert_eq!(c, Catch::Arrived);
+        assert!(!c.brings_followers());
+        assert!(!c.moves_the_tab());
+    }
+
+    #[test]
+    fn a_workspace_reported_mid_switch_is_left_entirely_alone() {
+        // Observed: goto went t-android -> ac-app and the hook fired saying
+        // "t-android". Treating that as somebody's doing sent seven followers
+        // back and focused the tab just left, which fired another switch.
+        let c = catch(false, Settling::InFlight);
+        assert_eq!(c, Catch::MidSwitch);
+        assert!(!c.brings_followers(), "the followers are already at the real destination");
+        assert!(!c.moves_the_tab(), "this is the bounce");
+    }
+
+    #[test]
+    fn a_second_run_while_one_is_in_flight_does_nothing_at_all() {
+        // Measured: two concurrent runs moving seven windows apiece, at the
+        // same second, in opposite directions to the switch that caused them.
+        for settling in [Settling::Ours, Settling::InFlight, Settling::Settled] {
+            let c = catch(true, settling);
+            assert_eq!(c, Catch::Busy, "{settling:?}");
+            assert!(!c.brings_followers());
+            assert!(!c.moves_the_tab());
+        }
+    }
+
+    #[test]
+    fn a_change_nobody_here_caused_is_chased() {
+        // Clicking a window, the menu bar, a keybinding: the followers come
+        // along and herdr's tab comes with them.
+        let c = catch(false, Settling::Settled);
+        assert_eq!(c, Catch::Chase);
+        assert!(c.brings_followers());
+        assert!(c.moves_the_tab());
+    }
+
+    #[test]
+    fn a_tab_clicked_during_the_switch_gets_the_last_word() {
+        // Observed: two taps 400ms apart left herdr on t/slingr and AeroSpace
+        // on t-video, because the lock turned the second away and nothing
+        // looked again.
+        assert!(look_again("t-video", Some("t-slingr")), "the tab moved on");
+        assert!(!look_again("t-video", Some("t-video")), "landed where it was going");
+        assert!(!look_again("t-video", None), "no tab focused, nothing to chase");
     }
 }

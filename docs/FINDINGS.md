@@ -685,3 +685,44 @@ process spawn and a round-trip — so a convoy of five is about 275ms of the
 660, and all of the visible movement. **The only lever left on flashing is how
 many windows follow you.** That is why grounding matters: it is the way to
 take a window out of the convoy without giving up the default.
+
+
+## The flashing was two races, not slow code
+
+Both were found by instrumenting `follow`, which until then left no trace at
+all. One tap on a tab produced this:
+
+```
+GOTO    t-android -> ac-app    moved 7   1033ms
+follow  t-android   moved 4   ours=False   978ms
+follow  t-android   moved 7   ours=False  1148ms
+GOTO    ac-app -> t-android    moved 0
+```
+
+**`follow` had no lock.** `goto` has had `only_one` since the beginning;
+`exec-on-workspace-change` could spawn as many `follow` processes as AeroSpace
+fired changes, and two of them moved the same seven windows at the same second,
+each undoing part of what the other had just done. It now takes the same lock,
+and a run that finds it held records why rather than doing it anyway.
+
+**The echo guard was keyed on the name alone.** `Echo::was_ours(here)` asked
+"did we just go *here*", and AeroSpace reports the workspace it is on when the
+hook fires — which during a switch can still be the one being *left*. So the
+guard failed open on exactly the wrong beat: slingr read `t-android`, concluded
+a person must have gone there, moved every follower back, and told herdr to
+focus the tab it had just left. That fired another switch. The bounce was
+slingr's own.
+
+It is now three states rather than two — `Ours`, `InFlight`, `Settled`
+(`store::settling_from`) — and a change reported while one of our switches is
+still settling is left entirely alone. `watch::catch` turns the lock and those
+three into the four things the hook can do, and the four are tested by name.
+
+A third, found while checking the fix: two taps 400ms apart left herdr on one
+tab and AeroSpace on another, because `only_one("goto")` turned the second away
+and nothing ever looked again — the *earlier* intent won. `goto` now takes one
+more look before releasing the lock (`watch::look_again`), so the last tap gets
+the last word.
+
+Verified after: four switches and a double-tap, every `follow` reporting
+`Arrived` with nothing moved, no bounce, and both halves agreeing at the end.
