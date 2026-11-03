@@ -19,9 +19,9 @@ is `slingr`.
 ## Build
 
 ```sh
-./build.sh      # cargo build --release AND swiftc the panel
+./build.sh      # cargo build --release AND swiftc the panel, Spaces helper and agent
 ./install.sh    # the above, plus the symlink and the herdr plugin
-cargo test      # 130 tests, none of which need AeroSpace or a screen
+cargo test      # 154 tests, none of which need a window manager or a screen
 ```
 
 `plugin/herdr-plugin.toml` is generated from the `.example` by `install.sh`

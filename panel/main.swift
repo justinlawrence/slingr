@@ -68,6 +68,9 @@ struct Request: Decodable {
     /// Which surface to draw. "board" is a different shape of answer — several
     /// windows sent to several tasks — not a differently-styled list.
     var layout: String?
+    /// Whether the board may offer drags. Not when the window manager cannot
+    /// move windows — macOS Spaces — where a drag would silently do nothing.
+    var drags: Bool?
     let items: [Item]
 }
 
@@ -208,6 +211,7 @@ final class Picker: ObservableObject {
     let request: Request
     var multi: Bool { request.multi ?? false }
     var isBoard: Bool { request.layout == "board" }
+    var drags: Bool { request.drags ?? true }
 
     /// The task showing now, so the board can ring its tile. Carried in the
     /// subtitle, which the board has no other use for.
@@ -391,7 +395,7 @@ final class Picker: ObservableObject {
     /// A window let go over a task. Dropping it back where it came from is how
     /// you undo, rather than a move to the place it already is.
     func drop(_ windowId: String, on task: String) {
-        guard request.items.contains(where: { $0.id == windowId && $0.marker == nil }) else { return }
+        guard drags, request.items.contains(where: { $0.id == windowId && $0.marker == nil }) else { return }
         if home(of: windowId) == task {
             pending.removeValue(forKey: windowId)
         } else {
@@ -858,7 +862,8 @@ struct BoardView: View {
                 hint("⏎", "sling them")
                 hint("esc", "put them back")
             } else {
-                Text("drag a window onto a task")
+                // Where nothing can be moved for you, say where it can be.
+                Text(picker.drags ? "drag a window onto a task" : "re-file a window in Mission Control")
                     .font(type.small)
                     .foregroundStyle(ink.dim)
                 hint("click", "go there")
@@ -937,11 +942,13 @@ private struct Tile: View {
                     lineWidth: over || isHere ? 2 : 1
                 )
         )
-        .dropDestination(for: String.self) { ids, _ in
-            for id in ids { picker.drop(id, on: task) }
-            return true
-        } isTargeted: { targeted in
-            over = targeted
+        .when(picker.drags) {
+            $0.dropDestination(for: String.self) { ids, _ in
+                for id in ids { picker.drop(id, on: task) }
+                return true
+            } isTargeted: { targeted in
+                over = targeted
+            }
         }
     }
 
@@ -972,7 +979,16 @@ private struct Tile: View {
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { picker.goTo(window.id) }
-        .draggable(window.id)
+        .when(picker.drags) { $0.draggable(window.id) }
+    }
+}
+
+extension View {
+    /// A modifier applied only when `on` — so the board can leave drags out
+    /// altogether rather than offer ones that would do nothing.
+    @ViewBuilder
+    func when<V: View>(_ on: Bool, _ apply: (Self) -> V) -> some View {
+        if on { apply(self) } else { self }
     }
 }
 

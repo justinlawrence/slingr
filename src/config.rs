@@ -12,6 +12,10 @@ const DEFAULT: &str = include_str!("../workspaces.toml");
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {
+    /// Which window manager tasks live in: `"aerospace"`, the default, or
+    /// `"spaces"` for macOS's own — see `docs/SPACES.md`.
+    #[serde(default)]
+    pub backend: crate::wm::Backend,
     #[serde(default)]
     pub known: Vec<String>,
     #[serde(default)]

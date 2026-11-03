@@ -8,13 +8,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use slingr::aerospace::{self, AeroSpace};
 use slingr::app::{self, Batch, Outcome, Run, Session};
 use slingr::picker::Window;
 use slingr::config::{self, Config};
 use slingr::dialog::{Prompt, SystemEvents};
 use slingr::panel::Panel;
 use slingr::store::{self, ActionLog, FollowList, Layout, NameCache, Pins, Placed};
+use slingr::wm::{self, Patience, Synced, WindowManager};
 
 #[derive(Parser)]
 #[command(name = "slingr", about = "Throw a window at a task.", version)]
@@ -81,8 +81,23 @@ enum Cmd {
     },
     /// Print the paths sling reads and writes.
     Paths,
-    /// Ask AeroSpace what it sees, and change nothing.
+    /// Ask the window manager what it sees, and change nothing.
     Probe,
+    /// Print the task in front. What the agent shows in the menu bar, since
+    /// macOS has no name for a Space.
+    Here,
+    /// List every screen's Spaces and the task each one is for.
+    Spaces,
+    /// Print, as JSON, the task each desktop is for, screen by screen in
+    /// Mission Control's order: what the agent writes over Mission Control's
+    /// "Desktop N", since macOS will not let a desktop be renamed.
+    Labels,
+    /// Give the desktop showing on the main screen to a task — how a desktop
+    /// that already holds windows becomes one.
+    Bind {
+        /// The task, named as herdr names it; `t/forms` becomes `t-forms`.
+        task: String,
+    },
 }
 
 /// Printing that stops quietly when the reader goes away, as in
@@ -113,9 +128,22 @@ fn main() -> Result<()> {
         Some(Cmd::Following { prune }) => list_following(prune),
         Some(Cmd::Stats { recent }) => stats(recent),
         Some(Cmd::Probe) => probe(),
+        Some(Cmd::Here) => {
+            if let Some(here) = wm::open(Patience::Query).focused_workspace() {
+                say!("{here}");
+            }
+            Ok(())
+        }
+        Some(Cmd::Spaces) => list_spaces(),
+        Some(Cmd::Labels) => print_labels(),
+        Some(Cmd::Bind { task }) => bind(&task),
         Some(Cmd::Paths) => {
+            say!("backend {:?}", wm::configured());
             say!("panel   {}{}", slingr::panel::binary().display(),
                  if slingr::panel::available() { "" } else { "   (missing — falls back to the dialog)" });
+            let helper = slingr::panel::beside("slingr-spaces");
+            say!("spaces  {}{}", helper.display(),
+                 if helper.exists() { "" } else { "   (missing — the Spaces backend cannot answer)" });
             say!("config  {}", config::config_path().display());
             say!("state   {}", store::state_dir().display());
             say!("log     {}", ActionLog::default().path().display());
@@ -163,10 +191,11 @@ fn sling_in(start: app::Mode) -> Result<()> {
     let mut cache = NameCache::load();
     let mut follow = FollowList::load();
     let mut pins = Pins::load();
+    let wm = wm::open(Patience::Query);
     // The panel when it is there, the AppleScript dialog when it is not, so a
     // missing build degrades to something that still works.
     let prompt: Box<dyn Prompt> = if slingr::panel::available() {
-        Box::new(Panel)
+        Box::new(Panel { drags: wm.moves_windows() })
     } else {
         Box::new(SystemEvents)
     };
@@ -177,7 +206,7 @@ fn sling_in(start: app::Mode) -> Result<()> {
     for _ in 0..24 {
         let session = app::run_session_from(
             start,
-            &AeroSpace::default(),
+            wm.as_ref(),
             prompt.as_ref(),
             &cfg,
             &cache.workspaces,
@@ -261,7 +290,6 @@ extern "C" {
 }
 
 fn goto_now() -> Result<()> {
-    use slingr::aerospace::WindowManager;
     use slingr::watch::{decide, Action};
 
     let Some(_held) = only_one("goto") else {
@@ -270,7 +298,7 @@ fn goto_now() -> Result<()> {
         note(&json!({ "at": store::iso8601(store::now_unix()), "skipped": "already running" }));
         return Ok(());
     };
-    let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
+    let wm = wm::open(Patience::Switch);
     // At most twice: one look, and one more if the tab moved on while we
     // were switching. Bounded so a tab that keeps changing cannot spin.
     for _ in 0..2 {
@@ -281,10 +309,10 @@ fn goto_now() -> Result<()> {
         // separately for each is three process spawns on the path of every tab
         // switch. An empty workspace has no focused window, so that case still has
         // to ask — which is the reason the direct query exists at all.
-        let focused = aero.focused_window();
+        let focused = wm.focused_window();
         let here = match &focused {
             Some(w) => w.workspace.clone(),
-            None => aero.focused_workspace().unwrap_or_default(),
+            None => wm.focused_workspace().unwrap_or_default(),
         };
 
         // No window counts: an empty task is somewhere to go, so nothing here
@@ -318,10 +346,10 @@ fn goto_now() -> Result<()> {
                 // visible rearrangement instead of two.
                 let on = match &focused {
                     Some(w) => Some(w.monitor.clone()),
-                    None => aero.focused_monitor(),
+                    None => wm.focused_monitor(),
                 };
                 let brought = app::follow_to(
-                    &aero,
+                    wm.as_ref(),
                     app::Following {
                     windows: &follow.ids(),
                     apps: &follow.bundles(),
@@ -357,10 +385,10 @@ fn goto_now() -> Result<()> {
                 let hands_kept = matches!((came_along, &hands_on), (true, Some(_)));
                 match (came_along, hands_on) {
                     (true, Some(w)) => {
-                        aero.focus(&w.id);
+                        wm.focus(&w.id);
                     }
                     _ => {
-                        aero.focus_workspace(&target);
+                        wm.focus_workspace(&target);
                     }
                 }
                 say!("{here} -> {target}");
@@ -404,8 +432,6 @@ fn note(entry: &serde_json::Value) {
 }
 
 fn follow_now() -> Result<()> {
-    use slingr::aerospace::WindowManager;
-
     // `goto` has left a line per switch since the beginning; this one left
     // none, so "it feels like things happen more than once" could only be
     // argued about. One line per run says how many times AeroSpace actually
@@ -421,10 +447,10 @@ fn follow_now() -> Result<()> {
         return Ok(());
     }
     let began = Instant::now();
-    let aero = AeroSpace::default();
+    let wm = wm::open(Patience::Query);
     let follow = FollowList::load();
-    let Some(here) = aero.focused_workspace() else {
-        say!("AeroSpace did not answer");
+    let Some(here) = wm.focused_workspace() else {
+        say!("{} did not answer", wm.name());
         return Ok(());
     };
     // When our own `goto` caused this change, the followers were brought a
@@ -452,9 +478,9 @@ fn follow_now() -> Result<()> {
     } else {
         // Only the screen being worked on. Clicking a window on another
         // display must not pull everything across to it.
-        let on = aero.focused_monitor();
+        let on = wm.focused_monitor();
         let brought = app::follow_to(
-            &aero,
+            wm.as_ref(),
             app::Following {
                 windows: &follow.ids(),
                 apps: &follow.bundles(),
@@ -494,7 +520,10 @@ fn follow_now() -> Result<()> {
     // switch — to write down a layout that has usually not moved since the
     // last one. `restore` prefers the action log anyway, which records intent
     // and is written the moment anything is slung.
-    let snapped = if snapshot_is_stale() { snapshot().unwrap_or(0) } else { 0 };
+    //
+    // Not at all where windows cannot be moved: there is no restore to feed,
+    // and macOS keeps each window on its Space without being asked.
+    let snapped = if wm.moves_windows() && snapshot_is_stale() { snapshot().unwrap_or(0) } else { 0 };
     note(&json!({
         "at": store::iso8601(store::now_unix()),
         "follow": here,
@@ -507,8 +536,6 @@ fn follow_now() -> Result<()> {
 }
 
 fn list_following(prune: bool) -> Result<()> {
-    use slingr::aerospace::WindowManager;
-
     let mut follow = FollowList::load();
 
     // These follow without anyone having asked, so they belong at the top of
@@ -528,7 +555,7 @@ fn list_following(prune: bool) -> Result<()> {
     // Window ids do not survive the application restarting, so an entry can
     // outlive the window it named. Such an entry is skipped anyway, but a list
     // that does not say so is worse than no list.
-    let live: Vec<String> = AeroSpace::default()
+    let live: Vec<String> = wm::open(Patience::Query)
         .all_windows()
         .map(|all| all.into_iter().map(|w| w.id).collect())
         .unwrap_or_default();
@@ -584,7 +611,10 @@ fn record_one(run: Run, cache: &mut NameCache, follow: &mut FollowList) -> Resul
     }
     let mut entry = log_entry(&run.outcome, run.window.as_ref());
     if run.occupancy.is_none() {
-        entry["aerospace_unavailable"] = json!(true);
+        // `aerospace_unavailable` for AeroSpace, as it always was, so the log
+        // reads the same across the change; `spaces_unavailable` for Spaces.
+        let backend = format!("{:?}", wm::configured()).to_lowercase();
+        entry[format!("{backend}_unavailable")] = json!(true);
     }
     ActionLog::default().append(&entry)?;
 
@@ -636,16 +666,12 @@ fn record_many(batch: Batch, cache: &mut NameCache, follow: &mut FollowList) -> 
     Ok(())
 }
 
-/// Showing a crowded workspace is slow, and abandoning the call would not stop
-/// AeroSpace doing the work anyway.
-const SWITCH_TIMEOUT: Duration = Duration::from_secs(180);
-
 fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<()> {
-    let aero = AeroSpace::with_timeout(SWITCH_TIMEOUT);
+    let wm = wm::open(Patience::Switch);
     let settle = Duration::from_millis(settle_ms);
 
     if poll {
-        return watch_by_polling(&aero, dry_run, Duration::from_millis(interval_ms.max(100)));
+        return watch_by_polling(wm.as_ref(), dry_run, Duration::from_millis(interval_ms.max(100)));
     }
 
     let stream = match slingr::herdr::subscribe(&["tab.focused"]) {
@@ -674,38 +700,25 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
         }
     });
 
-    // AeroSpace's own events, so the follow list keeps up with a workspace
-    // change from any cause — a keybinding, a click, or sling itself. Moving a
-    // window by id changes neither focus nor workspace, so this cannot feed
-    // itself: bringing followers raises no further event.
+    // The window manager's own events, so the follow list keeps up with a
+    // workspace change from any cause — a keybinding, a click, or sling
+    // itself. Moving a window by id changes neither focus nor workspace, so
+    // this cannot feed itself: bringing followers raises no further event.
     if !dry_run {
         thread::spawn(move || {
-            let Ok(child) = std::process::Command::new(slingr::aerospace::BIN)
-                .args(["subscribe", "focused-workspace-changed", "--no-send-initial"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            else {
-                return;
-            };
-            let Some(out) = child.stdout else { return };
-            use slingr::aerospace::WindowManager;
-            let aero = AeroSpace::default();
+            let source = wm::open(Patience::Query);
+            let Some(changes) = source.workspace_changes() else { return };
             let mut last = String::new();
-            for line in BufReader::new(out).lines() {
-                let Ok(line) = line else { break };
-                let Some(workspace) = slingr::watch::workspace_changed(&line) else {
-                    continue;
-                };
+            for workspace in changes {
                 if workspace == last {
                     continue;
                 }
                 last = workspace.clone();
                 let follow = FollowList::load();
                 if !follow.windows.is_empty() {
-                    let on = aero.focused_monitor();
+                    let on = source.focused_monitor();
                     app::follow_to(
-                        &aero,
+                        source.as_ref(),
                         app::Following {
                 windows: &follow.ids(),
                 apps: &follow.bundles(),
@@ -729,13 +742,13 @@ fn watch(dry_run: bool, poll: bool, interval_ms: u64, settle_ms: u64) -> Result<
         let before = slingr::herdr::focused();
         thread::sleep(settle);
         while rx.try_recv().is_ok() {}
-        act_on(&aero, slingr::herdr::focused(), before, dry_run);
+        act_on(wm.as_ref(), slingr::herdr::focused(), before, dry_run);
     }
     say!("herdr closed the connection");
     Ok(())
 }
 
-fn watch_by_polling(aero: &AeroSpace, dry_run: bool, wait: Duration) -> Result<()> {
+fn watch_by_polling(wm: &dyn WindowManager, dry_run: bool, wait: Duration) -> Result<()> {
     say!(
         "polling herdr every {}ms{}  (ctrl-c to stop)",
         wait.as_millis(),
@@ -744,7 +757,7 @@ fn watch_by_polling(aero: &AeroSpace, dry_run: bool, wait: Duration) -> Result<(
     let mut settled: Option<String> = None;
     loop {
         let tab = slingr::herdr::focused();
-        act_on(aero, tab.clone(), settled, dry_run);
+        act_on(wm, tab.clone(), settled, dry_run);
         settled = tab;
         thread::sleep(wait);
     }
@@ -758,14 +771,13 @@ fn watch_by_polling(aero: &AeroSpace, dry_run: bool, wait: Duration) -> Result<(
 /// was made from, including where AeroSpace ended up a moment later. That last
 /// field is the one worth having: a switch that is immediately undone looks
 /// identical from outside to a switch that never happened.
-fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_run: bool) {
-    use slingr::aerospace::WindowManager;
+fn act_on(wm: &dyn WindowManager, tab: Option<String>, settled: Option<String>, dry_run: bool) {
     use slingr::watch::{decide, Action};
 
     let began = Instant::now();
-    let focused = aero.focused_window();
-    let here = aero.focused_workspace().unwrap_or_default();
-    let occupancy = aero.occupancy().unwrap_or_default();
+    let focused = wm.focused_window();
+    let here = wm.focused_workspace().unwrap_or_default();
+    let occupancy = wm.occupancy().unwrap_or_default();
     // The log and `decide` both only ever wanted the numbers; the icon stack
     // is a panel concern and has no business in the watch record.
     let counts: std::collections::BTreeMap<String, usize> =
@@ -803,9 +815,9 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
                 // AeroSpace hides everything not in the active workspace, and
                 // the terminal lives in exactly one.
                 let t0 = Instant::now();
-                let on = aero.focused_monitor();
+                let on = wm.focused_monitor();
                 let brought = app::follow_to(
-                    aero,
+                    wm,
                     app::Following {
                 windows: &follow.ids(),
                 apps: &follow.bundles(),
@@ -828,14 +840,14 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
                 }
 
                 let t1 = Instant::now();
-                let ok = aero.focus_workspace(&target);
+                let ok = wm.focus_workspace(&target);
                 let switch_ms = t1.elapsed().as_millis();
 
                 // Did it stay? A window left behind in the old workspace can
                 // pull focus straight back, which reads as a flash and no
                 // apparent change.
                 thread::sleep(Duration::from_millis(1200));
-                let after = aero.focused_window();
+                let after = wm.focused_window();
 
                 entry["action"] = json!("switch");
                 entry["switch_ok"] = json!(ok);
@@ -868,15 +880,14 @@ fn act_on(aero: &AeroSpace, tab: Option<String>, settled: Option<String>, dry_ru
     let _ = ActionLog::watch().append(&entry);
 }
 
-/// Teach AeroSpace every task we know about, from every source at once.
+/// Teach the window manager every task we know about, from every source at
+/// once.
 ///
 /// This is what lets a brand-new task be switched to, appear in AeroSpace's
 /// menu bar, and be offered by name — without sling keeping a list of its own.
 fn sync_workspaces(loud: bool) -> Result<()> {
-    use slingr::aerospace::WindowManager;
-
     let cfg = Config::load()?;
-    let aero = AeroSpace::default();
+    let wm = wm::open_for(cfg.backend, Patience::Query);
 
     let mut names: Vec<String> = Vec::new();
     let mut add = |candidates: Vec<String>| {
@@ -888,24 +899,20 @@ fn sync_workspaces(loud: bool) -> Result<()> {
     };
     add(slingr::herdr::tasks());
     add(cfg.known.clone());
-    add(aero.all_workspaces().unwrap_or_default());
+    add(wm.all_workspaces().unwrap_or_default());
     // Whatever the old remembered-names file still holds, so nothing that was
     // invented before this existed is lost.
     add(store::NameCache::load().workspaces);
     names.sort();
 
-    let text = std::fs::read_to_string(slingr::aeroconf::path()).unwrap_or_default();
-    if !slingr::aeroconf::declares_version_2(&text) {
-        say!("~/.aerospace.toml needs `config-version = 2` before persistent-workspaces works");
-        return Ok(());
-    }
-
-    let changed = slingr::aeroconf::sync(&names)?;
-    if changed {
-        let _ = std::process::Command::new(slingr::aerospace::BIN)
-            .arg("reload-config")
-            .status();
-    }
+    let changed = match wm.sync_workspaces(&names) {
+        Synced::Written => true,
+        Synced::Unchanged => false,
+        Synced::Refused(why) => {
+            say!("{why}");
+            return Ok(());
+        }
+    };
     if loud {
         say!(
             "{} tasks {}",
@@ -931,9 +938,7 @@ fn snapshot_is_stale() -> bool {
 }
 
 fn snapshot() -> Result<usize> {
-    use slingr::aerospace::WindowManager;
-
-    let Some(windows) = AeroSpace::default().all_windows() else {
+    let Some(windows) = wm::open(Patience::Query).all_windows() else {
         return Ok(0);
     };
     let layout = Layout {
@@ -949,11 +954,13 @@ fn snapshot() -> Result<usize> {
 }
 
 fn restore(dry_run: bool) -> Result<()> {
-    use slingr::aerospace::WindowManager;
-
-    let aero = AeroSpace::default();
-    let Some(live) = aero.all_windows() else {
-        say!("AeroSpace did not answer");
+    let wm = wm::open(Patience::Query);
+    if !wm.moves_windows() {
+        say!("{} cannot move windows, and keeps each one on its Space by itself", wm.name());
+        return Ok(());
+    }
+    let Some(live) = wm.all_windows() else {
+        say!("{} did not answer", wm.name());
         return Ok(());
     };
 
@@ -1010,7 +1017,7 @@ fn restore(dry_run: bool) -> Result<()> {
         if dry_run {
             say!("  {} -> {target}   ({})", w.label(), if exact { "snapshot" } else { "log" });
             moved += 1;
-        } else if aero.move_window(&w.id, target) {
+        } else if wm.move_window(&w.id, target) {
             moved += 1;
             if exact {
                 from_snapshot += 1;
@@ -1034,15 +1041,10 @@ fn restore(dry_run: bool) -> Result<()> {
 
 /// Read-only: the two queries a sling starts with, and nothing else.
 fn probe() -> Result<()> {
-    use slingr::aerospace::WindowManager;
-
-    let aero = AeroSpace::default();
-    match aero.try_run(&["list-windows", "--focused", "--format", aerospace::FORMAT]) {
-        Ok(out) if out.is_empty() => say!("focused  (nothing focused)"),
-        Ok(out) => say!("focused  {out}"),
-        Err(why) => say!("focused  FAILED: {why}"),
-    }
-    match aero.occupancy() {
+    let wm = wm::open(Patience::Query);
+    say!("backend  {}", wm.name());
+    say!("focused  {}", wm.probe_focused());
+    match wm.occupancy() {
         Some(counts) => {
             // The stack too, because "what will the panel draw on this row"
             // is exactly the question probe exists to answer.
@@ -1061,6 +1063,61 @@ fn probe() -> Result<()> {
     say!("herdr    {}", slingr::herdr::tasks().join(", "));
     say!("known    {}", Config::load()?.known.join(", "));
     say!("seen     {}", cache.workspaces.join(", "));
+    Ok(())
+}
+
+/// Every screen's Spaces, in Mission Control's order, with the task each is
+/// for — the picture Mission Control would draw if a Space could have a name.
+fn list_spaces() -> Result<()> {
+    use slingr::spaces::{names, Bindings, Spaces};
+
+    let spaces = Spaces::default();
+    let Some(state) = spaces.state() else {
+        say!("{} did not answer", spaces.helper().display());
+        return Ok(());
+    };
+    let names = names(&state, &Bindings::load());
+    for display in &state.displays {
+        say!("{} {}", if display.main { "main screen" } else { "screen" }, display.id);
+        for space in &display.spaces {
+            let held = state.windows.iter().filter(|w| w.spaces == [space.id]).count();
+            say!(
+                "  {} {:<28} {held} window{}",
+                if space.id == display.current { "●" } else { " " },
+                names.get(&space.id).map(String::as_str).unwrap_or("?"),
+                if held == 1 { "" } else { "s" }
+            );
+        }
+    }
+    let everywhere = state.windows.iter().filter(|w| w.spaces.len() > 1).count();
+    if everywhere > 0 {
+        say!("{everywhere} on every desktop");
+    }
+    if state.windows.iter().all(|w| w.title.is_empty()) {
+        say!("no titles — whatever runs this needs Screen Recording");
+    }
+    Ok(())
+}
+
+/// For the agent. Nothing at all when the helper does not answer, so that a
+/// name is never laid over a desktop it was not meant for.
+fn print_labels() -> Result<()> {
+    use slingr::spaces::{labels, Bindings, Spaces};
+
+    if let Some(state) = Spaces::default().state() {
+        say!("{}", serde_json::to_string(&labels(&state, &Bindings::load()))?);
+    }
+    Ok(())
+}
+
+fn bind(task: &str) -> Result<()> {
+    let name = slingr::picker::sanitise_workspace(task);
+    if name.is_empty() {
+        say!("{task:?} is not a name a task can have");
+        return Ok(());
+    }
+    let was = slingr::spaces::Spaces::default().bind_here(&name)?;
+    say!("{was} is now {name}");
     Ok(())
 }
 

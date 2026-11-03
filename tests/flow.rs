@@ -1,9 +1,9 @@
-//! The sling flow, driven without AeroSpace or a screen.
+//! The sling flow, driven without a window manager or a screen.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use slingr::aerospace::WindowManager;
+use slingr::wm::WindowManager;
 use slingr::app::{self, Outcome};
 use slingr::config::{Config, Order};
 use slingr::dialog::Prompt;
@@ -35,6 +35,8 @@ struct FakeWm {
     /// minimised window behaves exactly like this.
     focus_refuses: Vec<String>,
     move_succeeds: bool,
+    /// Whether it can move windows at all. macOS Spaces cannot.
+    moves: bool,
     calls: RefCell<Vec<Call>>,
 }
 
@@ -73,12 +75,21 @@ impl FakeWm {
             focus_succeeds: true,
             focus_refuses: Vec::new(),
             move_succeeds: true,
+            moves: true,
             calls: RefCell::new(Vec::new()),
         }
+    }
+
+    /// One that can only switch and report, as macOS Spaces can.
+    fn that_cannot_move() -> Self {
+        Self { moves: false, ..Self::new() }
     }
 }
 
 impl WindowManager for FakeWm {
+    fn moves_windows(&self) -> bool {
+        self.moves
+    }
     fn focused_window(&self) -> Option<Window> {
         self.window.clone()
     }
@@ -204,6 +215,7 @@ fn config() -> Config {
         known: vec!["ac-app".into(), "t-forms".into(), "infra".into(), "t-mail".into()],
         labels: BTreeMap::from([("ac".to_string(), "art corner".to_string())]),
         order: Order { prefixes: vec!["t".into(), "ac".into()] },
+        ..Config::default()
     }
 }
 
@@ -1339,4 +1351,67 @@ fn slinging_an_ordinary_window_grounds_nothing() {
     let w = window("11513", "infra", "Arty Corner Mail");
     assert!(!app::absorb(&mut list, &Outcome::Moved { to: "t-pair".into(), created: false }, &w));
     assert!(list.grounded.is_empty());
+}
+
+// ------------------------------------- a window manager that cannot move
+
+fn tabs_offered(rows: &[Row]) -> (Vec<String>, Vec<String>) {
+    let tabs = rows.iter().filter(|r| r.marker.as_deref() == Some("tab"));
+    (
+        tabs.clone().map(|r| r.id.clone()).collect(),
+        tabs.filter(|r| r.active).map(|r| r.id.clone()).collect(),
+    )
+}
+
+#[test]
+fn the_sling_key_asks_where_to_go_when_nothing_can_be_moved() {
+    // macOS Spaces will not move another application's window. Offering to
+    // sling one would be a question whose every answer fails.
+    let wm = FakeWm::that_cannot_move();
+    let seen = Capture(RefCell::new(Vec::new()));
+    let _ = app::run_session_from(app::Mode::One, &wm, &seen, &config(), &[], Following::default(), &[]);
+
+    let rows = seen.0.borrow();
+    let (offered, showing) = tabs_offered(&rows);
+    assert_eq!(offered, vec![TO_JUMP, TO_BOARD], "no slinging tabs at all");
+    assert_eq!(showing, vec![TO_JUMP]);
+    assert!(!rows.iter().any(|r| r.marker.as_deref() == Some("subject")), "no window is being slung");
+}
+
+#[test]
+fn jumping_still_goes_places_when_nothing_can_be_moved() {
+    let wm = FakeWm::that_cannot_move();
+    match app::run_session_from(
+        app::Mode::One, &wm, &FakePrompt::picking("ac-app"), &config(), &[], Following::default(), &[],
+    ) {
+        Session::Single(run) => assert_eq!(run.outcome, Outcome::Jumped { to: "ac-app".into() }),
+        Session::Batch(_) => panic!("a jump is not a batch"),
+    }
+    assert!(wm.calls.borrow().is_empty());
+}
+
+#[test]
+fn a_drag_is_not_an_instruction_where_nothing_can_be_moved() {
+    // The panel is told not to offer drags. If one arrives anyway it must not
+    // turn into a move that silently fails, logged as though it were tried.
+    let wm = FakeWm::that_cannot_move();
+    let prompt = BoardAnswer::new(&[&sling_to("7695", "t-forms")]);
+    match board(&wm, &prompt) {
+        Session::Single(run) => assert_eq!(run.outcome, Outcome::Cancelled),
+        Session::Batch(_) => panic!("nothing should have been attempted"),
+    }
+    assert!(wm.calls.borrow().is_empty(), "{:?}", wm.calls.borrow());
+    let (offered, _) = tabs_offered(&prompt.drew());
+    assert_eq!(offered, vec![TO_JUMP, TO_BOARD]);
+}
+
+#[test]
+fn nothing_is_dragged_along_by_a_window_manager_that_cannot_move() {
+    // Belonging everywhere is then the Dock's business — All Desktops — and
+    // trying here would only fail once per follower on every switch.
+    let wm = FakeWm::that_cannot_move();
+    let ids = following(&["7695"]);
+    let follow = Following { windows: &ids, apps: &[], grounded: &[] };
+    assert!(app::follow_to(&wm, follow, "t-mail", "", None, None).is_empty());
+    assert!(wm.calls.borrow().is_empty());
 }

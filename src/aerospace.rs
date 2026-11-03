@@ -6,73 +6,23 @@
 //! the cached menu and leaves a line in the action log.
 
 use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use crate::picker::{occupancy_from, parse_window, Occupancy, Window};
+use crate::wm::{run_bounded, CallFailure, Synced, WindowManager};
 
 pub const BIN: &str = "/opt/homebrew/bin/aerospace";
 /// Generous on purpose. A wedged server never answers, so waiting longer costs
 /// one slow menu; a tight timeout on a loaded machine costs a wrong one.
 pub const TIMEOUT: Duration = Duration::from_secs(5);
+/// Showing a crowded workspace is slow, and abandoning the call would not stop
+/// AeroSpace doing the work anyway.
+pub const SWITCH_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub const FORMAT: &str =
     "%{window-id}|%{workspace}|%{monitor-id}|%{app-name}|%{app-bundle-id}|%{window-title}";
-
-/// What sling needs from a window manager. A trait so the flow can be tested
-/// without a running AeroSpace — see `tests/flow.rs`.
-pub trait WindowManager {
-    fn focused_window(&self) -> Option<Window>;
-    /// Every window AeroSpace manages, across all workspaces.
-    fn all_windows(&self) -> Option<Vec<Window>>;
-    /// What each workspace holds — how many windows, and which applications
-    /// they belong to; `None` if the query failed. Workspaces holding nothing
-    /// are absent rather than zero.
-    fn occupancy(&self) -> Option<BTreeMap<String, Occupancy>>;
-    /// Focus a window by id, returning whether it actually took.
-    fn focus(&self, window_id: &str) -> bool;
-    fn move_focused_to(&self, workspace: &str) -> bool;
-    /// Bring a workspace to the front.
-    fn focus_workspace(&self, workspace: &str) -> bool;
-    /// Move a window by id, without focusing it first.
-    fn move_window(&self, window_id: &str, workspace: &str) -> bool;
-    /// The screen currently being worked on.
-    fn focused_monitor(&self) -> Option<String>;
-    /// The workspace in front. Asked directly rather than derived from the
-    /// focused window, because an empty workspace has no focused window and
-    /// deriving it there yields nothing at all.
-    fn focused_workspace(&self) -> Option<String>;
-    /// Every workspace AeroSpace knows about, empty ones included. With
-    /// `persistent-workspaces` set this is the whole task list, which is why
-    /// sling no longer keeps one of its own.
-    fn all_workspaces(&self) -> Option<Vec<String>>;
-}
-
-/// Why a call produced nothing. Kept apart from `None` so that "AeroSpace is
-/// wedged" and "AeroSpace answered, with nothing" stay distinguishable — they
-/// call for opposite reactions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CallFailure {
-    /// The binary could not be started at all.
-    Spawn,
-    /// It ran and refused.
-    Status(Option<i32>),
-    /// It never answered. A wedged server looks like this.
-    Timeout,
-}
-
-impl std::fmt::Display for CallFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CallFailure::Spawn => write!(f, "could not start {BIN}"),
-            CallFailure::Status(Some(c)) => write!(f, "exited {c}"),
-            CallFailure::Status(None) => write!(f, "killed by a signal"),
-            CallFailure::Timeout => write!(f, "no answer within {}s", TIMEOUT.as_secs()),
-        }
-    }
-}
 
 pub struct AeroSpace {
     binary: String,
@@ -99,42 +49,15 @@ impl AeroSpace {
 
     /// The same call, keeping the reason it failed.
     pub fn try_run(&self, args: &[&str]) -> Result<String, CallFailure> {
-        let child = match Command::new(&self.binary)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(_) => return Err(CallFailure::Spawn),
-        };
-        let pid = child.id();
-
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-
-        match rx.recv_timeout(self.timeout) {
-            Ok(Ok(out)) if out.status.success() => {
-                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-            }
-            Ok(Ok(out)) => Err(CallFailure::Status(out.status.code())),
-            Ok(Err(_)) => Err(CallFailure::Spawn),
-            Err(_) => {
-                // Deliberately not killed. A stuck client is cheap — it exits
-                // if the server ever answers, and `pkill -f bin/aerospace`
-                // clears any that pile up. Signalling a window-manager client
-                // mid-request is the riskier half of that trade, and whether
-                // it can itself wedge the server has not been established.
-                let _ = pid;
-                Err(CallFailure::Timeout)
-            }
-        }
+        run_bounded(&self.binary, args, self.timeout)
     }
 }
 
 impl WindowManager for AeroSpace {
+    fn name(&self) -> &str {
+        "AeroSpace"
+    }
+
     fn focused_window(&self) -> Option<Window> {
         let out = self.run(&["list-windows", "--focused", "--format", FORMAT])?;
         parse_window(out.lines().next()?)
@@ -213,5 +136,53 @@ impl WindowManager for AeroSpace {
     fn move_window(&self, window_id: &str, workspace: &str) -> bool {
         self.run(&["move-node-to-workspace", "--window-id", window_id, "--", workspace])
             .is_some()
+    }
+
+    /// Every task written into `persistent-workspaces`, so it exists — and can
+    /// be switched to, and appears in AeroSpace's menu bar — before anything
+    /// is in it.
+    fn sync_workspaces(&self, names: &[String]) -> Synced {
+        let text = std::fs::read_to_string(crate::aeroconf::path()).unwrap_or_default();
+        if !crate::aeroconf::declares_version_2(&text) {
+            return Synced::Refused(
+                "~/.aerospace.toml needs `config-version = 2` before persistent-workspaces works".into(),
+            );
+        }
+        match crate::aeroconf::sync(names) {
+            Ok(true) => {
+                let _ = Command::new(&self.binary).arg("reload-config").status();
+                Synced::Written
+            }
+            Ok(false) => Synced::Unchanged,
+            Err(why) => Synced::Refused(format!("{why:#}")),
+        }
+    }
+
+    /// AeroSpace's own event stream, so the follow list keeps up with a
+    /// workspace change from any cause — a keybinding, a click, or sling.
+    fn workspace_changes(&self) -> Option<Box<dyn Iterator<Item = String> + Send>> {
+        let child = Command::new(&self.binary)
+            .args(["subscribe", "focused-workspace-changed", "--no-send-initial"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let out = child.stdout?;
+        Some(Box::new(
+            BufReader::new(out)
+                .lines()
+                .map_while(Result::ok)
+                .filter_map(|line| crate::watch::workspace_changed(&line)),
+        ))
+    }
+
+    /// The raw line, so a probe shows exactly what AeroSpace said — or exactly
+    /// why it said nothing, which is usually what a probe is run to find out.
+    fn probe_focused(&self) -> String {
+        match self.try_run(&["list-windows", "--focused", "--format", FORMAT]) {
+            Ok(out) if out.is_empty() => "(nothing focused)".to_string(),
+            Ok(out) => out,
+            Err(why) => format!("FAILED: {why}"),
+        }
     }
 }

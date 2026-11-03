@@ -19,13 +19,19 @@ use crate::picker::Row;
 use crate::theme::{self, Theme};
 
 /// Beside the sling binary, so the pair moves together.
+pub fn binary() -> std::path::PathBuf {
+    beside("slingr-panel")
+}
+
+/// A helper that ships next to the sling binary — the panel, or the Spaces
+/// helper.
 ///
 /// `current_exe` hands back the path sling was *invoked* by, which is normally
-/// `~/.local/bin/sling` — a symlink into the build directory. The panel lives
+/// `~/.local/bin/sling` — a symlink into the build directory. The helpers live
 /// next to the real binary, not next to the link, so the link has to be
 /// followed. Both are tried, resolved first, because a copied binary has no
 /// link to follow.
-pub fn binary() -> std::path::PathBuf {
+pub fn beside(name: &str) -> std::path::PathBuf {
     let invoked = std::env::current_exe().ok();
     let resolved = invoked.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
 
@@ -33,7 +39,7 @@ pub fn binary() -> std::path::PathBuf {
         .into_iter()
         .flatten()
         .filter_map(|p| p.parent())
-        .map(|dir| dir.join("slingr-panel"));
+        .map(|dir| dir.join(name));
 
     let mut first = None;
     for candidate in candidates {
@@ -42,7 +48,7 @@ pub fn binary() -> std::path::PathBuf {
         }
         first.get_or_insert(candidate);
     }
-    first.unwrap_or_else(|| "slingr-panel".into())
+    first.unwrap_or_else(|| name.into())
 }
 
 pub fn available() -> bool {
@@ -60,11 +66,22 @@ struct Request<'a> {
     pinned_folders: &'a [String],
     /// Which surface to draw — the panel's ordinary list, or the board.
     layout: &'a str,
+    /// Whether the board may offer to drag windows between tasks. Not when
+    /// the window manager cannot move them: a drag that silently does nothing
+    /// is worse than no drag at all.
+    drags: bool,
     items: &'a [Row],
 }
 
-#[derive(Default)]
-pub struct Panel;
+pub struct Panel {
+    pub drags: bool,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self { drags: true }
+    }
+}
 
 impl Panel {
     fn ask_with(
@@ -86,6 +103,7 @@ impl Panel {
             theme: theme::current(),
             pinned_folders,
             layout,
+            drags: self.drags,
             items: rows,
         };
         let body = serde_json::to_vec(&request).ok()?;
@@ -163,7 +181,7 @@ mod tests {
             Occupancy { count: 2, stack: vec!["dev.zed.Zed".into()] },
         )]);
         let menu = crate::picker::build_menu(Some(&held), &[], &[], "", &[], &BTreeMap::new(), &[]);
-        let rows: Vec<Row> = crate::app::tabs(crate::app::Mode::Board)
+        let rows: Vec<Row> = crate::app::tabs(crate::app::Mode::Board, true)
             .into_iter()
             .chain(menu.rows)
             .chain(std::iter::once(Row::space("t-empty")))
@@ -177,11 +195,13 @@ mod tests {
             theme: crate::theme::Theme::default(),
             pinned_folders: &[],
             layout: "board",
+            drags: false,
             items: &rows,
         };
         let json = serde_json::to_value(&request).expect("serialises");
 
         assert_eq!(json["layout"], "board");
+        assert_eq!(json["drags"], false, "a board that cannot move windows must not offer to");
         assert_eq!(json["subtitle"], "t-pair", "the board reads `here` off the subtitle");
         assert_eq!(json["pinnedFolders"], serde_json::json!([]), "camelCase, as Swift spells it");
 

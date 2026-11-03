@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::aerospace::WindowManager;
+use crate::wm::WindowManager;
 use crate::config::Config;
 use crate::dialog::Prompt;
 use crate::picker::{self, Window, ALL, ALL_APP, NEW, TO_JUMP, TO_MANY, TO_ONE, TO_BOARD};
@@ -185,7 +185,10 @@ pub fn follow_to(
     only_from: Option<&str>,
     only_on: Option<&str>,
 ) -> Vec<(Window, Outcome)> {
-    if follow.is_empty() {
+    // Where windows cannot be moved, belonging everywhere is the window
+    // manager's own business — a Dock assignment to All Desktops — and asking
+    // here would only spend a listing to fail every move.
+    if follow.is_empty() || !wm.moves_windows() {
         return Vec::new();
     }
     let Some(all) = wm.all_windows() else {
@@ -259,7 +262,7 @@ pub fn run(
         pins,
     );
 
-    let mut rows = tabs(Mode::One);
+    let mut rows = tabs(Mode::One, wm.moves_windows());
     rows.push(picker::Row::subject(&window.app, &window.title, &window.bundle));
     rows.extend(menu.rows.clone());
     // Sits with the current workspace, because both answer the same question:
@@ -304,7 +307,7 @@ pub fn run(
     // has to carry anything unusual.
     let mut heading = String::new();
     if occupancy.is_none() {
-        heading.push_str("AeroSpace is not answering — these are remembered names");
+        heading.push_str(&format!("{} is not answering — these are remembered names", wm.name()));
     }
 
     let done = |outcome| Run {
@@ -443,7 +446,7 @@ pub fn run_many(
     // are here, in the answer, rather than as a question of their own.
     let from = windows.clone();
     let menu = picker::build_window_menu(&from, &here, |w| follow.has(w));
-    let mut rows = tabs(Mode::Many);
+    let mut rows = tabs(Mode::Many, wm.moves_windows());
     rows.extend(menu.rows.clone());
 
     let Some(picked) = prompt.choose_many_rows(
@@ -559,13 +562,29 @@ pub enum Mode {
 
 /// The tabs, with the showing one marked. Built in one place so every mode
 /// offers the same strip and cannot drift.
-pub fn tabs(showing: Mode) -> Vec<picker::Row> {
-    vec![
-        picker::Row::tab(TO_ONE, picker::ONCE_LABEL, showing == Mode::One),
-        picker::Row::tab(TO_MANY, picker::MANY_LABEL, showing == Mode::Many),
-        picker::Row::tab(TO_JUMP, picker::JUMP_LABEL, showing == Mode::Jump),
-        picker::Row::tab(TO_BOARD, picker::BOARD_LABEL, showing == Mode::Board),
-    ]
+///
+/// `moves` is whether the window manager can put a window somewhere. Without
+/// that, slinging is not something to offer — there is only going places and
+/// looking at the board.
+pub fn tabs(showing: Mode, moves: bool) -> Vec<picker::Row> {
+    let mut tabs = Vec::new();
+    if moves {
+        tabs.push(picker::Row::tab(TO_ONE, picker::ONCE_LABEL, showing == Mode::One));
+        tabs.push(picker::Row::tab(TO_MANY, picker::MANY_LABEL, showing == Mode::Many));
+    }
+    tabs.push(picker::Row::tab(TO_JUMP, picker::JUMP_LABEL, showing == Mode::Jump));
+    tabs.push(picker::Row::tab(TO_BOARD, picker::BOARD_LABEL, showing == Mode::Board));
+    tabs
+}
+
+/// The mode actually opened when `mode` is asked for. A window manager that
+/// cannot move windows has nothing to sling with, so the sling key opens on
+/// the question it can answer: where to go.
+fn offered(mode: Mode, wm: &dyn WindowManager) -> Mode {
+    match mode {
+        Mode::One | Mode::Many if !wm.moves_windows() => Mode::Jump,
+        other => other,
+    }
 }
 
 /// Go to a task rather than sending a window to one.
@@ -594,7 +613,7 @@ pub fn run_jump(
         &cfg.labels,
         pins,
     );
-    let mut rows = tabs(Mode::Jump);
+    let mut rows = tabs(Mode::Jump, wm.moves_windows());
     rows.extend(menu.rows.clone());
 
     let done = |outcome| Run { window: None, occupancy: occupancy.clone(), outcome, brought: Vec::new() };
@@ -656,7 +675,7 @@ pub fn run_board(
     let occupancy = picker::occupancy_of(&windows);
 
     let menu = picker::build_window_menu(&windows, &here, |w| follow.has(w));
-    let mut rows = tabs(Mode::Board);
+    let mut rows = tabs(Mode::Board, wm.moves_windows());
     rows.extend(menu.rows.clone());
 
     // Tasks holding nothing still get a tile, so the board can tidy *into* one
@@ -696,6 +715,11 @@ pub fn run_board(
     // as a sling is, so tidying on the board feeds `restore` the same
     // statement of intent that slinging by hand does.
     let drags: Vec<(&str, &str)> = answer.iter().filter_map(|a| picker::sling_parts(a)).collect();
+    // A front end is not trusted to have hidden the drags it was told to:
+    // where nothing can be moved, a drag is not an instruction.
+    if !drags.is_empty() && !wm.moves_windows() {
+        return single(Outcome::Cancelled);
+    }
     if !drags.is_empty() {
         let mut results = Vec::new();
         for (window_id, target) in drags {
@@ -770,15 +794,20 @@ pub fn run_session_from(
     follow: Following<'_>,
     pins: &[String],
 ) -> Session {
-    let mut mode = start;
+    let mut mode = offered(start, wm);
     // Toggling is the user's to do as often as they like; the bound is only
     // here so a prompt that always answers "switch" cannot spin forever.
     for _ in 0..16 {
-        let switched = |to: &str| match to {
-            TO_MANY => Mode::Many,
-            TO_JUMP => Mode::Jump,
-            TO_BOARD => Mode::Board,
-            _ => Mode::One,
+        let switched = |to: &str| {
+            offered(
+                match to {
+                    TO_MANY => Mode::Many,
+                    TO_JUMP => Mode::Jump,
+                    TO_BOARD => Mode::Board,
+                    _ => Mode::One,
+                },
+                wm,
+            )
         };
         match mode {
             Mode::One => {
