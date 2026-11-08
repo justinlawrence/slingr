@@ -47,7 +47,9 @@ enum Names {
 ///
 /// A switch made through SkyLight leaves the Dock out of it, and the Dock owns
 /// the rest of a switch: ShiftPlus found it fires no space-change notification
-/// on macOS 15 and later and can leave the old desktop drawn. Its shortcuts are
+/// on macOS 15 and later and can leave the old desktop drawn. Here it left the
+/// windows of every desktop it switched away from on screen, over the next
+/// one (docs/SPACES.md). Its shortcuts are
 /// symbolic hotkeys 118 to 133 — Desktop 1 to 16 — read at the moment of
 /// pressing, so whatever they are set to is what is pressed.
 enum DockShortcut {
@@ -356,6 +358,8 @@ final class DesktopNames {
     private var shown: [Spot] = []
     private var shows = 0
     private var told = false
+    /// Whether a row has been read lying past the edge of its screen.
+    private var strayed = false
     /// The rows as last read, for the log.
     private var layout = ""
 
@@ -426,6 +430,7 @@ final class DesktopNames {
         shown = []
         shows = 0
         told = false
+        strayed = false
         layout = ""
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(100))
@@ -483,9 +488,27 @@ final class DesktopNames {
                 continue
             }
             described.append("row \(Self.text(row.bar)), first desktop \(Self.text(row.desktops.first ?? .zero))")
+            let screen = CGDisplayBounds(row.display)
             // Measured: closing, the row slides up off the screen before it
             // goes, and a name there would be drawn where nothing is.
-            if !row.bar.isEmpty, row.bar.maxY <= CGDisplayBounds(row.display).minY { continue }
+            if !row.bar.isEmpty, row.bar.maxY <= screen.minY { continue }
+            // Measured over ten days of it opening into pictures: for every
+            // number of desktops, the place the row was most often read at
+            // was centred on its screen, to within two points. But 104 of the
+            // 459 times names went up on it, the row was read partly past the
+            // screen's edge, and 86 times names were drawn past it, some on
+            // the next screen. A row read like that is not to be trusted, so
+            // it goes unnamed until it fits.
+            let past = row.desktops.contains {
+                !$0.isEmpty && ($0.minX < screen.minX - 1 || $0.maxX > screen.maxX + 1)
+            }
+            if past {
+                if !strayed {
+                    strayed = true
+                    log("Mission Control gives desktops past the edge of their screen; not naming them (\(described.last ?? ""))")
+                }
+                continue
+            }
             let middle = row.bar.isEmpty ? nil : row.bar.midY
             for (name, frame) in zip(bar.names, row.desktops) where !frame.isEmpty {
                 guard let name else { continue }
@@ -498,6 +521,11 @@ final class DesktopNames {
                     cover: label ? frame.size : .zero
                 ))
             }
+        }
+        // Whether the row of pictures opens around the pointer is not known.
+        // Logged so the next misplaced name can be checked against it.
+        if let pointer = CGEvent(source: nil)?.location {
+            described.append("pointer \(Int(pointer.x)),\(Int(pointer.y))")
         }
         layout = described.joined(separator: "; ")
         return spots
@@ -537,6 +565,8 @@ final class DesktopNames {
             log("no names: Mission Control never appeared in the Dock's tree in \(ms)ms")
         } else if bars.isEmpty {
             log("no names: slingr labels gave none")
+        } else if last.isEmpty, strayed {
+            log("no names: the row never fitted its screen in \(ms)ms (\(layout))")
         } else if last.isEmpty {
             log("no names: no desktop showing is a task's (\(layout))")
         } else {

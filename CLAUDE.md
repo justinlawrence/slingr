@@ -21,7 +21,7 @@ is `slingr`.
 ```sh
 ./build.sh      # cargo build --release AND swiftc the panel, Spaces helper and agent
 ./install.sh    # the above, plus the symlink and the herdr plugin
-cargo test      # 154 tests, none of which need a window manager or a screen
+cargo test      # 155 tests, none of which need a window manager or a screen
 ```
 
 `plugin/herdr-plugin.toml` is generated from the `.example` by `install.sh`

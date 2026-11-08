@@ -377,11 +377,21 @@ impl Spaces {
     }
 
     /// Show `space`, unless it already is.
-    fn show(&self, space: u64, state: &State) -> bool {
+    ///
+    /// Only the Dock switches, through the agent, and there is nothing to fall
+    /// back on (see `switchTo` in spaces/main.swift). So a switch that does
+    /// not happen is said: from a herdr hook, nothing else would be seen.
+    fn show(&self, space: u64, state: &State, task: &str) -> bool {
         if display_of(state, space).is_some_and(|d| d.current == space) {
             return true;
         }
-        self.ask(&["switch", &space.to_string()]).is_some()
+        let shown = self.ask(&["switch", &space.to_string()]).is_some();
+        if !shown {
+            notify(&format!(
+                "Could not switch to {task}. Is slingr agent running? Its log: ~/.local/state/slingr/agent.log"
+            ));
+        }
+        shown
     }
 }
 
@@ -430,7 +440,7 @@ impl WindowManager for Spaces {
         let Some(state) = self.state() else { return false };
         let mut bindings = Bindings::load();
         let space = match way_to(workspace, &state, &bindings) {
-            Way::Go(id) => return self.show(id, &state),
+            Way::Go(id) => return self.show(id, &state, workspace),
             Way::Claim(space) => space,
             Way::Add => match self.add_desktop() {
                 Ok(space) => space,
@@ -445,7 +455,7 @@ impl WindowManager for Spaces {
             return false;
         }
         self.tell_agent();
-        self.show(space.id, &state)
+        self.show(space.id, &state, workspace)
     }
 
     fn move_window(&self, _window_id: &str, _workspace: &str) -> bool {
@@ -655,6 +665,20 @@ mod tests {
         // asking, so that a missing agent is said at once.
         assert!(helper.contains(r#"bundle = "dev.slingr.agent""#));
         assert!(include_str!("../agent/Info.plist").contains("<string>dev.slingr.agent</string>"));
+    }
+
+    /// SkyLight will switch a screen to another Space for anyone, at once and
+    /// with no slide, which makes it tempting as a fallback or a fast path.
+    /// But only the Dock may hide the desktop being left: switched that way,
+    /// every desktop left that had windows of its own kept them on screen
+    /// over the next one, and a Dock restart did not mend it (docs/SPACES.md).
+    #[test]
+    fn the_helper_never_switches_behind_the_docks_back() {
+        let helper = include_str!("../spaces/main.swift");
+        assert!(
+            !helper.contains(r#""SLSManagedDisplaySetCurrentSpace""#),
+            "slingr-spaces switches through SkyLight, which leaves the old desktop's windows drawn"
+        );
     }
 
     #[test]

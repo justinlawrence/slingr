@@ -15,10 +15,12 @@
 // linked: a symbol that disappears in a later macOS fails one command with a
 // message, instead of stopping the binary from loading at all.
 //
-// Measured on macOS 26.6.2 with SIP on — see docs/SPACES.md. Reading and
-// switching need no permission at all. Moving another process's window to a
-// different Space is refused by every route tried, so there is no command for
-// it: one that could only ever fail would be a lie in the interface.
+// Measured on macOS 26.6.2 with SIP on — see docs/SPACES.md. Reading needs no
+// permission at all. Switching is the Dock's, pressed by the agent: SkyLight
+// will switch for anyone, but does only half of it. Moving another process's
+// window to a different Space is refused by every route tried, so there is no
+// command for it: one that could only ever fail would be a lie in the
+// interface.
 
 import AppKit
 
@@ -81,7 +83,6 @@ enum Sky {
     typealias CopyManagedDisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
     typealias GetActiveSpace = @convention(c) (Int32) -> UInt64
     typealias CopySpacesForWindows = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
-    typealias SetCurrentSpace = @convention(c) (Int32, CFString, UInt64) -> Void
 
     static let connection = fn("SLSMainConnectionID", as: MainConnection.self)()
 }
@@ -195,25 +196,20 @@ func focusedWindow() -> UInt32? {
 
 /// Show `space` on whichever screen it belongs to, and wait until SkyLight
 /// says it is showing.
+///
+/// Only ever through the Dock. SkyLight's `SLSManagedDisplaySetCurrentSpace`
+/// switches too, at once and with no slide, but it does half a switch: the
+/// new desktop's windows appear and the old one's stay drawn over them.
+/// Measured on 6 November, every desktop it left that had windows of its own
+/// kept them on screen, three of three, until the Dock next left that desktop
+/// itself. Only the Dock may hide a desktop, and a Dock restart does not
+/// mend it. So a switch the Dock cannot make fails, rather than half happens.
 func switchTo(_ space: UInt64) -> Bool {
     guard let display = displays().first(where: { $0.spaces.contains { $0.id == space } }) else {
         fail("no screen has a Space \(space)")
     }
     if display.current == space { return true }
-    if switchThroughDock(space, on: display) { return true }
-
-    // Behind the Dock's back: the one write SkyLight still allows, and all of
-    // a switch the Dock does not hear about. Kept for when the agent cannot
-    // press anything — not running, no Accessibility, no shortcut.
-    let set = Sky.fn("SLSManagedDisplaySetCurrentSpace", as: Sky.SetCurrentSpace.self)
-    set(Sky.connection, display.id as CFString, space)
-
-    // A second is generous; the switch confirms itself well inside one.
-    for _ in 0..<20 {
-        if displays().first(where: { $0.id == display.id })?.current == space { return true }
-        usleep(50_000)
-    }
-    return false
+    return switchThroughDock(space, on: display)
 }
 
 /// Raise one particular window. Needs Accessibility; without it the
@@ -302,7 +298,7 @@ func switchThroughDock(_ space: UInt64, on display: DisplayOut) -> Bool {
     centre.postNotificationName(Agent.switchDesktop, object: String(n), userInfo: nil, deliverImmediately: true)
 
     // The Dock animates; half a second is usual. Past this, the press did not
-    // land, and SkyLight is asked instead.
+    // land.
     let deadline = Date().addingTimeInterval(1.5)
     while Date() < deadline {
         slice()

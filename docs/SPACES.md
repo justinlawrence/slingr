@@ -20,8 +20,8 @@ grew out of them.
 | Read every screen's Spaces, in order, and which is showing | yes — `SLSCopyManagedDisplaySpaces`, no permission |
 | Read which Space each window is on | yes — `SLSCopySpacesForWindows`, no permission |
 | Read window titles | only with Screen Recording — 0 of 165 without it |
-| Switch a screen to another Space | yes — `SLSManagedDisplaySetCurrentSpace`, no permission, but the Dock is left out |
-| Have the Dock switch | yes — its own "Switch to Desktop N", pressed by the agent with Accessibility; 0.4–0.5s |
+| Switch a screen to another Space | half — `SLSManagedDisplaySetCurrentSpace`, no permission and no slide, but the old desktop's windows stay drawn; not used |
+| Have the Dock switch | yes — its own "Switch to Desktop N", pressed by the agent with Accessibility; 0.4–0.5s, and it slides |
 | Move **another process's** window to another Space | **no** — refused by every route tried |
 | Move a process's **own** window to another Space | yes, and back |
 | Add a desktop | yes — Mission Control's **+**, pressed through Accessibility; 0.8s, and it shows |
@@ -93,6 +93,32 @@ Mission Control's own name.
 - **Matching** is by position, so a screen whose row has a different number
   of Spaces from slingr's list gets no names at all: a wrong name is worse than
   none.
+- **Opening into pictures**, when the pointer goes to the top or a window is
+  dragged up, is where names went wrong. Over ten days of the agent's log,
+  27 October to 6 November, names over the row of labels never went past the
+  screen's edge. The row of pictures was read in many places. For every
+  number of desktops the commonest was centred on the screen, to within two
+  points: 15 desktops at 76 from the left and 77 from the right, 10 at 501
+  and 502. But 104 of the 459 times names went up on it, the row was read
+  partly past the screen's edge. 86 times names were drawn past it, some on
+  the next screen. A row read like that now goes unnamed until it fits. The
+  log cannot tell whether the rest of the off-centre reads were the row really
+  sitting there or the Dock's report lagging behind it. So each placement now
+  logs the pointer, in case the row opens around it.
+
+Checked again on 6 November, because an overlay never lines up as well as a
+name would. There is no name to set:
+
+- The label is the Dock's own string, `DesktopNum` = `Desktop %@` in
+  `Dock.app/Contents/Resources/en.lproj/Localizable.strings`, filled with a
+  number. Nothing about a particular desktop goes into it.
+- SkyLight does have `SLSSpaceSetName`, but a Space's name is its uuid:
+  `SLSSpaceCopyName` gave the uuid for all six Spaces read, the uuid
+  `com.apple.spaces` keeps and claims are made by. Setting it would change
+  which Space this is, not what Mission Control calls it, so it was not tried.
+- spaces-manager, tested on 26.3.1, says the label itself can only be changed
+  by injecting into the Dock, which needs SIP off. The App Store's Desktop
+  Space Renamer puts its names in the menu bar instead, as the agent does.
 
 ### macOS reorders desktops unless told not to
 
@@ -106,7 +132,7 @@ ctrl-arrow.
 ### Switching behind the Dock's back
 
 `SLSManagedDisplaySetCurrentSpace` is the one write SkyLight still allows, and
-it is what `switch` uses. But the Dock, not WindowServer, owns what usually
+it is what `switch` used first. But the Dock, not WindowServer, owns what usually
 comes with a switch: ShiftPlus found the call fires no `kCGSSpaceDidChange` on
 macOS 15 and later, and that the screen could stay frozen on the old desktop
 until a synthetic swipe made the Dock repaint. Here the screen did change and
@@ -131,9 +157,50 @@ switch 1382 (Desktop 4, ctrl-F4, new)     456ms   pressed Desktop 4
 
 The number is the desktop's place among its screen's desktops, which is how
 Mission Control numbers them; only the main screen's desktops are ever
-switched to, and the pointer was on it throughout. SkyLight is still the
+switched to, and the pointer was on it throughout. SkyLight was kept as the
 fallback — no agent, no Accessibility, no shortcut, or 1.5s without the switch
-landing. Whether the menu bar stays whole this way is what is being watched.
+landing — until 6 November, below. Now there is none: a switch the Dock does
+not make fails, and slingr says so in a notification.
+
+### Switching instantly through SkyLight: tried, and taken out
+
+The Dock's switch slides, and the slide is a flash some people cannot look
+at. Reduce Motion turns it into a fade, but it changes every animation on the
+machine, which rules it out for anyone testing animations on web pages. So on
+6 November the agent's menu gained "Switch desktops instantly": ticked, the
+helper switched through SkyLight first, which cuts straight to the desktop.
+
+It made 15 switches in four and a half minutes, a median of 166ms a `goto`
+against 609ms for the 100 the Dock made earlier that day, and the agent heard
+every one. But each desktop it left that had windows of its own kept them on
+screen, over the next desktop: t-pricing's Brave, t-shadcn's Brave and
+t-shad3's Chrome, three of three, all drawn over me-slingr's desktop at the
+end. CGWindowList called them on screen while SkyLight still put each on its
+own Space, so nothing had moved. The four desktops left that had no windows
+of their own showed nothing wrong.
+
+What did not mend it, with the switch turned off again:
+
+- `SLSHideSpaces` on one of the three Spaces, from outside the Dock: it
+  returned `15630336` and the window stayed. Hiding a desktop is the Dock's.
+- Restarting the Dock (`killall Dock`): all three stayed.
+
+What hides a desktop is the Dock's own switch away from it, as every
+desktop the Dock had left that day showed. So the setting and the SkyLight
+fallback are both gone, and a test pins that the helper never looks
+`SLSManagedDisplaySetCurrentSpace` up again. The menu bar drawn over itself on
+26 October was probably the same half switch.
+
+The agent did hear these switches. On 26 October, before the agent first
+pressed a shortcut at 20:29, every switch went through SkyLight. `follow` ran
+after all 17 of slingr's switches in the half hour before that. 15 logged
+`catch: "Arrived"` in `watch.jsonl`, and 2 stood aside mid-switch. The agent
+runs `follow` only on `activeSpaceDidChange`.
+
+An instant switch would have to be the Dock's own. InstantSpaceSwitcher posts
+the Dock a trackpad swipe with a near-zero distance and a high speed, one per
+desktop moved, and reports that the Dock then switches without the slide. Not
+yet tried here.
 
 ### Moving a window is refused, three ways
 
@@ -232,8 +299,8 @@ draws every task and its windows and goes where you click, with no drags.
 resident thing, and it stands where AeroSpace stood rather than being a slingr
 daemon: no state, no decisions — a key or a Space change becomes the same
 `slingr` call AeroSpace used to make. Its menu-bar item names the task in
-front, since macOS cannot, so a missing name is a missing agent. launchd starts
-it again after a crash; quitting it from the menu is left alone.
+front, since macOS cannot, so a missing name is a missing agent. launchd
+starts it again after a crash; quitting it from the menu is left alone.
 
 It is an app bundle so there is something to grant Screen Recording to: the
 helper inherits it, and titles appear. `build.sh` signs it with an Apple
@@ -282,28 +349,27 @@ Then, once:
   fallback, and whether *it* survives is not known either.
 - Whether applications put their windows back on the right desktops after a
   restart — Brave and Ghostty restore their own windows.
-- Whether Mission Control stays in step over many switches made through
-  SkyLight rather than through the Dock.
 - Whether the helper, run by slingr run by the agent, really is given the
   agent's Screen Recording — that is, whether the board shows titles.
 - Where Mission Control puts a new desktop when a full-screen window's Space is
   at the end of the row.
 - What becomes of a closed tab's desktop: nothing yet. It stays claimed, and
   Mission Control is reported to stop at sixteen desktops a screen.
-- Whether switching through SkyLight is what left the menu bar half-drawn —
-  that is, whether it stays whole now the Dock switches.
-- Whether the names over Mission Control show at all. Everything up to
-  putting them on screen is logged; whether they land above Mission Control,
-  and over its labels, has to be seen.
-- Where the row's desktops are once it opens into pictures — on hover, and when
-  a window is dragged up into it — and whether the names keep up.
+- Whether a row of pictures read off centre, but within its screen, is
+  where the pictures really are. Names still go up on one. The pointer is now
+  logged with each placement, to show whether the row opens around it.
 - Whether dropping a window on a desktop redraws Mission Control over the
   names, as CloseUp found its re-tiles do.
 - Whether "Switch to Desktop N" acts on the screen under the pointer rather
   than the main screen. The pointer was on the main screen for every
-  measurement; if not, the 1.5s fallback to SkyLight still lands the switch.
+  measurement; if not, the switch fails after 1.5s, and slingr says so.
 
 ## What the next iterations could be
+
+- **Switching instantly, through the Dock**: InstantSpaceSwitcher's swipe,
+  posted by the agent in place of the shortcut. The Dock would make the
+  switch, so its desktop is hidden as it should be. Untested here: whether
+  a jump of several desktops, one swipe each, shows the ones in between.
 
 - **Sling by dragging for you**: a synthetic mouse-down on the title bar, a
   desktop switch, a mouse-up. Needs Accessibility, flips Spaces visibly, and
