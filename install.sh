@@ -18,7 +18,7 @@ if command -v herdr >/dev/null 2>&1; then
     plugin/herdr-plugin.toml.example > plugin/herdr-plugin.toml
   herdr plugin unlink slingr >/dev/null 2>&1 || true
   herdr plugin link "$root/plugin" >/dev/null
-  echo "herdr plugin linked (tab.focused -> slingr goto)"
+  echo "herdr plugin linked (tab.focused -> slingr goto, pane.agent_status_changed -> slingr notify)"
 else
   echo "herdr not found — skipping the plugin"
 fi
@@ -36,4 +36,11 @@ config-version = 2:
   ctrl-alt-cmd-i = 'exec-and-forget $HOME/.local/bin/slingr jump'
 
 Then: aerospace reload-config && slingr sync
+
+slingr now says when an agent wants you, in a notification that goes to it
+when clicked (needs terminal-notifier: brew install terminal-notifier). Turn
+herdr's own off in ~/.config/herdr/config.toml, or each comes twice:
+
+  [ui.toast]
+  delivery = "off"
 EOF

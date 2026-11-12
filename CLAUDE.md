@@ -21,7 +21,7 @@ is `slingr`.
 ```sh
 ./build.sh      # cargo build --release AND swiftc the panel, Spaces helper and agent
 ./install.sh    # the above, plus the symlink and the herdr plugin
-cargo test      # 155 tests, none of which need a window manager or a screen
+cargo test      # 185 tests, none of which need a window manager or a screen
 ```
 
 `plugin/herdr-plugin.toml` is generated from the `.example` by `install.sh`
@@ -40,6 +40,9 @@ says which it will use.
   traits so they can be driven with no window manager and no screen.
 - `src/aerospace.rs`, `src/herdr.rs`, `src/dialog.rs`, `src/panel.rs` — the
   impure edges. Each is thin on purpose.
+- `src/attention.rs` — agents that want you: when to say so in a notification,
+  and what a click on one does (`slingr notify`, `slingr answer`). Its flows
+  are written against the `World` trait, for the same reason.
 - `panel/main.swift` — presentation only. Reads rows as JSON on stdin, prints
   chosen ids. All the thinking stays in Rust. Two surfaces: `PanelView` (the
   list) and `BoardView` (the tiles), chosen by the request's `layout`. The
@@ -68,7 +71,10 @@ says which it will use.
   hand-edit it, and note that a duplicate `persistent-workspaces` key makes
   AeroSpace reject the whole file silently.
 - `plugin/herdr-plugin.toml` — linked with `herdr plugin link`, runs
-  `slingr goto` on `tab.focused`.
+  `slingr goto` on `tab.focused` and `slingr notify` on
+  `pane.agent_status_changed`.
+- `~/.config/herdr/config.toml` — `[ui.toast] delivery = "off"`, because
+  slingr says those itself, in notifications a click takes you through.
 - `~/.config/slingr/workspaces.toml` — the tasks that are not herdr tabs.
 
 Nothing runs resident. Both hooks are invoked by AeroSpace and herdr

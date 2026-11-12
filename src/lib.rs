@@ -8,6 +8,7 @@
 pub mod aeroconf;
 pub mod aerospace;
 pub mod app;
+pub mod attention;
 pub mod config;
 pub mod dialog;
 pub mod herdr;

@@ -57,6 +57,8 @@ struct Tab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabRef {
     pub task: String,
+    /// The label as herdr shows it, `t/forms` rather than the task's `t-forms`.
+    pub label: String,
     pub id: String,
     pub focused: bool,
 }
@@ -127,9 +129,11 @@ pub fn parse_focused(json: &str) -> Option<String> {
     }
 }
 
-fn ask_tab_list() -> Option<String> {
+/// Ask herdr something and read its JSON reply. `None` if it refused, or did
+/// not answer within `TIMEOUT`.
+pub fn ask(args: &[&str]) -> Option<String> {
     let child = Command::new(bin())
-        .args(["tab", "list"])
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -146,6 +150,10 @@ fn ask_tab_list() -> Option<String> {
     }
 }
 
+fn ask_tab_list() -> Option<String> {
+    ask(&["tab", "list"])
+}
+
 /// The focused tab, asked of herdr.
 pub fn focused() -> Option<String> {
     parse_focused(&ask_tab_list()?)
@@ -157,18 +165,30 @@ pub fn focused() -> Option<String> {
 /// tasks with no agent behind them — so a miss is ordinary and means do
 /// nothing.
 pub fn tab_for(json: &str, task: &str) -> Option<TabRef> {
+    tab_refs(json)?.into_iter().find(|t| t.task == task)
+}
+
+/// The tab with a given id, from a `herdr tab list` reply.
+pub fn tab_with_id(json: &str, id: &str) -> Option<TabRef> {
+    tab_refs(json)?.into_iter().find(|t| t.id == id)
+}
+
+fn tab_refs(json: &str) -> Option<Vec<TabRef>> {
     let reply = serde_json::from_str::<Reply>(json).ok()?;
-    reply
-        .result
-        .tabs
-        .into_iter()
-        .filter(|t| !t.tab_id.is_empty())
-        .map(|t| TabRef {
-            task: sanitise_workspace(&t.label),
-            id: t.tab_id,
-            focused: t.focused,
-        })
-        .find(|t| t.task == task)
+    Some(
+        reply
+            .result
+            .tabs
+            .into_iter()
+            .filter(|t| !t.tab_id.is_empty())
+            .map(|t| TabRef {
+                task: sanitise_workspace(&t.label),
+                label: t.label,
+                id: t.tab_id,
+                focused: t.focused,
+            })
+            .collect(),
+    )
 }
 
 /// Bring a tab to the front. False if herdr would not, or could not.
@@ -182,9 +202,26 @@ pub fn focus_tab(id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Bring an agent's pane to the front, its workspace and tab with it. False
+/// if there is no agent in that pane any more.
+pub fn focus_agent(pane: &str) -> bool {
+    Command::new(bin())
+        .args(["agent", "focus", pane])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// The tab naming a task, asked of herdr.
 pub fn tab_named(task: &str) -> Option<TabRef> {
     tab_for(&ask_tab_list()?, task)
+}
+
+/// The tab with a given id, asked of herdr.
+pub fn tab_by_id(id: &str) -> Option<TabRef> {
+    tab_with_id(&ask_tab_list()?, id)
 }
 
 /// Ask herdr for its tabs. Empty if herdr is not installed or not answering —
@@ -241,6 +278,16 @@ mod tests {
         let other = tab_for(SAMPLE, "arb-lsp").expect("there is one");
         assert_eq!(other.id, "w7:t8");
         assert!(!other.focused);
+    }
+
+    #[test]
+    fn finds_a_tab_by_its_id_with_its_label_as_herdr_shows_it() {
+        let found = tab_with_id(SAMPLE, "w7:t4").expect("there is one");
+        assert_eq!(found.label, "t/gant-workload");
+        assert_eq!(found.task, "t-gant-workload");
+        assert!(found.focused);
+        assert!(tab_with_id(SAMPLE, "w1:t1").is_none());
+        assert!(tab_with_id("not json", "w7:t4").is_none());
     }
 
     #[test]

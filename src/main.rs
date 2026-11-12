@@ -45,6 +45,21 @@ enum Cmd {
     /// Made for herdr's `tab.focused` plugin hook. Does the same as a single
     /// beat of `watch`, without anything staying resident.
     Goto,
+    /// Say, in a notification that takes you there when clicked, that an
+    /// agent needs input or has finished; take it down once the agent moves
+    /// on.
+    ///
+    /// Made for herdr's `pane.agent_status_changed` plugin hook, and reads
+    /// the change from `HERDR_PLUGIN_EVENT_JSON`.
+    Notify,
+    /// Go to the agent a notification was about: what clicking one runs.
+    Answer {
+        /// The agent's pane, as herdr names it: `w7:p2J`.
+        pane: String,
+        /// Its tab, gone to instead if the agent has gone.
+        #[arg(long)]
+        tab: Option<String>,
+    },
     /// Follow herdr's focused tab into the matching workspace, staying
     /// resident. Only needed where the callbacks cannot be installed.
     Watch {
@@ -124,6 +139,8 @@ fn main() -> Result<()> {
         Some(Cmd::Jump) => sling_in(app::Mode::Jump),
         Some(Cmd::Board) => sling_in(app::Mode::Board),
         Some(Cmd::Goto) => goto_now(),
+        Some(Cmd::Notify) => notify_from_hook(),
+        Some(Cmd::Answer { pane, tab }) => answer(&pane, tab.as_deref()),
         Some(Cmd::Follow) => follow_now(),
         Some(Cmd::Following { prune }) => list_following(prune),
         Some(Cmd::Stats { recent }) => stats(recent),
@@ -429,6 +446,65 @@ fn goto_now() -> Result<()> {
 /// that can be read rather than guessed at.
 fn note(entry: &serde_json::Value) {
     let _ = ActionLog::watch().append(entry);
+}
+
+fn notify_from_hook() -> Result<()> {
+    use slingr::attention::{self, Report};
+
+    let Ok(json) = std::env::var("HERDR_PLUGIN_EVENT_JSON") else {
+        say!("nothing to do: run by herdr's pane.agent_status_changed hook, which says what changed");
+        return Ok(());
+    };
+    let Some(change) = attention::parse_change(&json) else {
+        // herdr's plugin log keeps what a hook prints, so a payload that has
+        // changed shape can be read there rather than guessed at.
+        eprintln!("not an agent status change: {json}");
+        return Ok(());
+    };
+    let report = attention::on_change(&attention::Live::from_env(), &change);
+    say!("{} {}: {report:?}", change.pane, change.status);
+    // An agent starting or stopping work is nearly every change, and says
+    // nothing worth keeping.
+    if report == Report::Quiet {
+        return Ok(());
+    }
+    let mut entry = json!({
+        "at": store::iso8601(store::now_unix()),
+        "pane": change.pane,
+        "status": change.status,
+        // herdr's own words, kept whole: its hooks and its socket spell this
+        // event differently, and the next change of spelling should be
+        // readable here (docs/FINDINGS.md).
+        "event": serde_json::from_str::<serde_json::Value>(&json).unwrap_or_default(),
+    });
+    match report {
+        Report::Quiet => {}
+        Report::Posted { kind, title } => {
+            entry["attention"] = json!("posted");
+            entry["kind"] = json!(kind);
+            entry["title"] = json!(title);
+        }
+        Report::NotPosted => entry["attention"] = json!("not posted"),
+        Report::Withdrawn => entry["attention"] = json!("withdrawn"),
+        Report::Left(why) => {
+            entry["attention"] = json!("unsaid");
+            entry["why"] = json!(why);
+        }
+        Report::Busy => entry["attention"] = json!("busy"),
+    }
+    note(&entry);
+    Ok(())
+}
+
+fn answer(pane: &str, tab: Option<&str>) -> Result<()> {
+    let went = slingr::attention::answer(&slingr::attention::Live::from_env(), pane, tab);
+    note(&json!({
+        "at": store::iso8601(store::now_unix()),
+        "answer": pane,
+        "tab": tab,
+        "went": format!("{went:?}").to_lowercase(),
+    }));
+    Ok(())
 }
 
 fn follow_now() -> Result<()> {
@@ -1166,4 +1242,47 @@ fn stats(recent: usize) -> Result<()> {
         say!("  {at}  {:<16} {app:<16} {from} -> {to}", e["outcome"].as_str().unwrap_or("?"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A click runs a command written into a string, which no compiler reads:
+    /// a renamed subcommand would leave every notification going nowhere.
+    #[test]
+    fn a_click_runs_a_command_slingr_has() {
+        let parsed = Cli::try_parse_from([
+            "slingr",
+            slingr::attention::ANSWER,
+            "w7:p2J",
+            "--tab",
+            "w7:t2J",
+        ])
+        .expect("answer is a subcommand");
+        assert!(matches!(
+            parsed.command,
+            Some(Cmd::Answer { pane, tab: Some(tab) }) if pane == "w7:p2J" && tab == "w7:t2J"
+        ));
+    }
+
+    /// herdr runs what the manifest names, and a name that is not a
+    /// subcommand fails only inside herdr's plugin log.
+    #[test]
+    fn the_plugin_runs_only_commands_slingr_has() {
+        let manifest: toml::Value =
+            toml::from_str(include_str!("../plugin/herdr-plugin.toml.example")).expect("toml");
+        let events = manifest["events"].as_array().expect("events");
+        for event in events {
+            let command = event["command"].as_array().expect("command");
+            let args: Vec<&str> = command.iter().map(|a| a.as_str().unwrap()).collect();
+            assert_eq!(args[0], "SLINGR_BINARY", "install.sh fills in the path");
+            assert!(Cli::try_parse_from(&args).is_ok(), "{args:?} is not a slingr command");
+        }
+        let notify = events
+            .iter()
+            .find(|e| e["on"].as_str() == Some("pane.agent_status_changed"))
+            .expect("the hook that makes notifications clickable");
+        assert_eq!(notify["command"][1].as_str(), Some("notify"));
+    }
 }

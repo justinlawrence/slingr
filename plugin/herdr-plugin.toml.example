@@ -8,7 +8,7 @@ id = "slingr"
 name = "slingr"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Bring AeroSpace to the workspace matching the focused herdr tab."
+description = "Bring AeroSpace to the workspace matching the focused herdr tab, and say when an agent wants you."
 platforms = ["macos"]
 
 [[events]]
@@ -25,3 +25,11 @@ command = ["SLINGR_BINARY", "sync"]
 [[events]]
 on = "tab.renamed"
 command = ["SLINGR_BINARY", "sync"]
+
+# An agent that needs input, or has finished while you were elsewhere, is said
+# in a notification that goes to its pane when clicked; on macOS herdr's own
+# cannot. Turn herdr's off with `[ui.toast] delivery = "off"` in
+# ~/.config/herdr/config.toml, or each one comes twice.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["SLINGR_BINARY", "notify"]

@@ -726,3 +726,81 @@ the last word.
 
 Verified after: four switches and a double-tap, every `follow` reporting
 `Arrived` with nothing moved, no bounce, and both halves agreeing at the end.
+
+
+## herdr's notifications on macOS cannot take you to the agent
+
+Checked on 12 November against herdr 0.9.5, the latest release (14 October);
+nothing merged since touches notifications. With `[ui.toast] delivery =
+"system"`, herdr runs
+
+```
+terminal-notifier -title "claude needs attention" -message "<workspace> · <its number> · <tab>" -activate com.mitchellh.ghostty
+```
+
+or AppleScript's `display notification` when terminal-notifier is missing.
+The pane goes along only on Windows: the target is built under
+`#[cfg(windows)]` in `client/shell/notification_policy.rs`. So on a Mac a
+click brings the terminal forward and stops there. The system log shows it
+plainly. A click at 18:55 that day reached terminal-notifier with a bundle id
+to activate and `command: (null)`. herdr's own docs say the same, herdr's
+triage bot closed #5066 saying macOS notifications "do not select a Herdr
+workspace or tab", and the request is open as Ideas discussion #625.
+
+herdr's in-app toasts (`delivery = "herdr"`) can be clicked, and `prefix+o`
+(`open_notification_target`) jumps to the pane of the one showing. But only
+one that is showing: with `system` none ever is, and `prefix+o` does nothing.
+
+So slingr says these itself (`src/attention.rs`), and herdr's are off. What
+that rests on:
+
+- **Plugin hooks hear `pane.agent_status_changed`.** It has been in herdr's
+  `PLUGIN_HOOK_EVENT_KINDS` since 0.9.0, though the plugin docs never name it.
+  Confirmed firing, with the pane:
+
+  ```
+  {"data":{"agent":"claude","agent_status":"done","pane_id":"w7:p2H",
+           "type":"pane_agent_status_changed","workspace_id":"w7"},
+   "event":"pane_agent_status_changed"}
+  ```
+
+- **The socket spells the same event differently.** Subscribed to per pane,
+  it arrives as `"event":"pane.agent_status_changed"`, dotted, and its `data`
+  has no `type`. An `unknown` status comes with no `agent` at all.
+- **`done` already carries herdr's rule.** `done` is idle but not yet seen,
+  and herdr's server marks a completion seen at once when its tab is in front
+  and the terminal focused (`apply_pane_state_change`); going to a tab marks
+  all of it seen. So `done` is exactly a finish herdr would have announced.
+  One pane went `done` at 19:16:10 and `idle` at 19:17:07, once seen. `blocked` carries no such rule — herdr's client applies it — so slingr
+  does: the tab in front in herdr, and the terminal the app in front.
+- **herdr waits a second** (`[ui.toast] delay_seconds`, default 1) and drops
+  a notification whose state has moved on by then. slingr waits the same
+  second, then reads the agent again with `herdr agent get`.
+- **The app in front comes from `lsappinfo`**, which needs no permission. A
+  hook runs as herdr, which has none.
+- **A hook inherits herdr's environment**, which is that of the shell herdr
+  was started from: `TERM_PROGRAM=ghostty` and
+  `__CFBundleIdentifier=com.mitchellh.ghostty` here. That is how the click
+  knows which app to bring forward.
+- **terminal-notifier 3.1.0's click** activates `-activate`'s app first, then
+  runs `-execute` with `/bin/sh -c` and waits for it (`AppDelegate.m`). The
+  command runs from launchd with none of herdr's environment, so slingr's
+  carries `HERDR_SOCKET_PATH` with it.
+- **A click goes all the way.** At 20:26:22 a click on "ac/app — claude has
+  finished" ran `slingr answer`, which found the agent, and herdr's
+  `tab.focused` had `goto` take the desktop from t-pricing to ac-app a second
+  later, in 506ms.
+- **`herdr agent focus` marks an agent seen without saying so.** After that
+  click the agent read `idle`, but no `pane.agent_status_changed` came, so
+  slingr still had its notification down as up. Harmless: macOS takes a
+  clicked notification away itself, and the entry goes at the agent's next
+  change.
+- **`herdr server reload-config` reaches the client.** The server tells it to
+  reload, and it re-reads `[ui.toast]`. After switching delivery to `off`,
+  the first finish slingr announced ran one terminal-notifier, its own.
+- **herdr's sounds are separate.** Its client plays them whatever `delivery`
+  says, so turning it off loses only the popups, and herdr's notice that it
+  has updated itself, which slingr does not say.
+- **`herdr plugin log list`** keeps each hook run's exit code, stdout and
+  stderr. `slingr notify` prints a line per run, and a payload it cannot read,
+  so a hook can be checked without adding any logging.

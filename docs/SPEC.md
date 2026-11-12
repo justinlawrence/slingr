@@ -349,6 +349,24 @@ everywhere arrive with you, so a new task is a terminal waiting to be worked in.
 A tab that is created or renamed triggers a sync, so its workspace exists
 before anything tries to go there.
 
+## An agent that wants you
+
+An agent stopped at a question, or finished while you were elsewhere, is what
+most often sends you to a task. herdr says so in a macOS notification, but a
+click on it only brings the terminal forward, and leaves you to find the tab.
+
+So slingr says it instead. herdr's `pane.agent_status_changed` hook runs
+`slingr notify`, which posts the notification through terminal-notifier,
+titled with the task. A click runs `slingr answer`, which brings the agent's
+pane to the front in herdr; herdr fires `tab.focused`, and `goto` takes you to
+the task as it would for a tab you clicked. herdr's own popups are off
+(`[ui.toast] delivery = "off"`), so nothing is said twice.
+
+It keeps herdr's manners. It waits a second, so a state that flickers says
+nothing. It says nothing about the tab in front of you while you are in the
+terminal. And a notification comes down once its agent moves on, so
+Notification Centre holds only what is still waiting.
+
 ## Surviving a restart
 
 AeroSpace does not remember which workspace a window belongs to. Restart it and

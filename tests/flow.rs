@@ -1415,3 +1415,242 @@ fn nothing_is_dragged_along_by_a_window_manager_that_cannot_move() {
     assert!(app::follow_to(&wm, follow, "t-mail", "", None, None).is_empty());
     assert!(wm.calls.borrow().is_empty());
 }
+
+// --- Agents that want you ------------------------------------------------
+
+mod attention {
+    use std::any::Any;
+    use std::cell::RefCell;
+
+    use slingr::attention::{self, Agent, Change, Kind, Note, Report, Said, Went, World};
+    use slingr::herdr::TabRef;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Step {
+        Wait,
+        Hold,
+        Said,
+        Agent,
+        Tab,
+        Front,
+        Post(String),
+        Withdraw,
+        Remember(Option<Said>),
+        FocusAgent,
+        FocusTab,
+    }
+
+    /// herdr, Notification Centre and the screen, as a list of what was asked.
+    struct Fake {
+        /// The agent as herdr reads it after the wait.
+        agent: Option<Agent>,
+        said: Option<Said>,
+        tab_in_front: bool,
+        terminal_in_front: bool,
+        lock_free: bool,
+        posts: bool,
+        agent_there: bool,
+        steps: RefCell<Vec<Step>>,
+    }
+
+    impl Fake {
+        fn with(agent: Option<Agent>) -> Self {
+            Self {
+                agent,
+                said: None,
+                tab_in_front: false,
+                terminal_in_front: false,
+                lock_free: true,
+                posts: true,
+                agent_there: true,
+                steps: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn steps(&self) -> Vec<Step> {
+            self.steps.borrow().clone()
+        }
+
+        fn did(&self, step: Step) {
+            self.steps.borrow_mut().push(step);
+        }
+    }
+
+    impl World for Fake {
+        fn wait(&self) {
+            self.did(Step::Wait);
+        }
+        fn hold(&self) -> Option<Box<dyn Any>> {
+            self.did(Step::Hold);
+            self.lock_free.then(|| Box::new(()) as Box<dyn Any>)
+        }
+        fn said(&self, _pane: &str) -> Option<Said> {
+            self.did(Step::Said);
+            self.said
+        }
+        fn remember(&self, _pane: &str, said: Option<Said>) {
+            self.did(Step::Remember(said));
+        }
+        fn agent(&self, _pane: &str) -> Option<Agent> {
+            self.did(Step::Agent);
+            self.agent.clone()
+        }
+        fn tab(&self, id: &str) -> Option<TabRef> {
+            self.did(Step::Tab);
+            Some(TabRef {
+                task: "t-cors".into(),
+                label: "t/cors".into(),
+                id: id.into(),
+                focused: self.tab_in_front,
+            })
+        }
+        fn terminal_in_front(&self) -> bool {
+            self.did(Step::Front);
+            self.terminal_in_front
+        }
+        fn post(&self, note: &Note, _agent: &Agent) -> bool {
+            self.did(Step::Post(format!("{}: {}", note.title, note.message)));
+            self.posts
+        }
+        fn withdraw(&self, _pane: &str) {
+            self.did(Step::Withdraw);
+        }
+        fn focus_agent(&self, _pane: &str) -> bool {
+            self.did(Step::FocusAgent);
+            self.agent_there
+        }
+        fn focus_tab(&self, _id: &str) -> bool {
+            self.did(Step::FocusTab);
+            true
+        }
+    }
+
+    fn agent(status: &str, seq: u64) -> Agent {
+        Agent {
+            pane: "w7:p2J".into(),
+            tab: "w7:t2J".into(),
+            name: "claude".into(),
+            status: status.into(),
+            seq,
+            title: String::new(),
+        }
+    }
+
+    fn change(status: &str) -> Change {
+        Change { pane: "w7:p2J".into(), status: status.into() }
+    }
+
+    #[test]
+    fn a_stop_is_waited_on_and_read_again_before_it_is_said() {
+        // herdr's own second, so a state that flickers says nothing. The
+        // wait comes before the lock, or every waiting hook would hold up the
+        // rest, and the agent is read after both: it is whether the stop
+        // still holds that matters, not what the event said.
+        let world = Fake::with(Some(agent("blocked", 40)));
+        let report = attention::on_change(&world, &change("blocked"));
+        assert_eq!(report, Report::Posted { kind: Kind::NeedsInput, title: "t/cors".into() });
+        assert_eq!(
+            world.steps(),
+            vec![
+                Step::Wait,
+                Step::Hold,
+                Step::Said,
+                Step::Agent,
+                Step::Tab,
+                Step::Post("t/cors: claude needs input".into()),
+                Step::Remember(Some(Said { kind: Kind::NeedsInput, seq: 40 })),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stop_that_has_passed_by_the_time_it_is_read_says_nothing() {
+        let world = Fake::with(Some(agent("working", 41)));
+        assert_eq!(attention::on_change(&world, &change("blocked")), Report::Left("moved on"));
+        assert!(!world.steps().iter().any(|s| matches!(s, Step::Post(_))));
+    }
+
+    #[test]
+    fn starting_work_with_nothing_up_asks_nothing_at_all() {
+        // Nearly every change is this one. No wait, no herdr, no
+        // terminal-notifier.
+        let world = Fake::with(None);
+        assert_eq!(attention::on_change(&world, &change("working")), Report::Quiet);
+        assert_eq!(world.steps(), vec![Step::Hold, Step::Said]);
+    }
+
+    #[test]
+    fn moving_on_takes_the_notification_down_at_once() {
+        let mut world = Fake::with(None);
+        world.said = Some(Said { kind: Kind::NeedsInput, seq: 40 });
+        assert_eq!(attention::on_change(&world, &change("working")), Report::Withdrawn);
+        assert_eq!(
+            world.steps(),
+            vec![Step::Hold, Step::Said, Step::Withdraw, Step::Remember(None)]
+        );
+    }
+
+    #[test]
+    fn nothing_is_said_about_the_tab_in_front_of_you() {
+        let mut world = Fake::with(Some(agent("blocked", 40)));
+        world.tab_in_front = true;
+        world.terminal_in_front = true;
+        assert_eq!(
+            attention::on_change(&world, &change("blocked")),
+            Report::Left("in front of you")
+        );
+        assert!(!world.steps().iter().any(|s| matches!(s, Step::Post(_))));
+    }
+
+    #[test]
+    fn the_tab_in_front_is_still_said_while_you_are_in_another_app() {
+        // herdr's rule too: its tab is showing, but you are not looking at it.
+        let mut world = Fake::with(Some(agent("blocked", 40)));
+        world.tab_in_front = true;
+        world.terminal_in_front = false;
+        assert!(matches!(
+            attention::on_change(&world, &change("blocked")),
+            Report::Posted { .. }
+        ));
+    }
+
+    #[test]
+    fn the_terminal_is_only_asked_about_when_the_tab_is_in_front() {
+        let world = Fake::with(Some(agent("blocked", 40)));
+        attention::on_change(&world, &change("blocked"));
+        assert!(!world.steps().contains(&Step::Front));
+    }
+
+    #[test]
+    fn a_notification_that_did_not_go_up_is_not_remembered() {
+        // Remembered, it would be "already said" for good, and never said.
+        let mut world = Fake::with(Some(agent("done", 40)));
+        world.posts = false;
+        assert_eq!(attention::on_change(&world, &change("done")), Report::NotPosted);
+        assert!(!world.steps().iter().any(|s| matches!(s, Step::Remember(_))));
+    }
+
+    #[test]
+    fn a_lock_not_had_in_time_does_nothing_rather_than_guess() {
+        let mut world = Fake::with(Some(agent("blocked", 40)));
+        world.lock_free = false;
+        assert_eq!(attention::on_change(&world, &change("blocked")), Report::Busy);
+        assert_eq!(world.steps(), vec![Step::Wait, Step::Hold]);
+    }
+
+    #[test]
+    fn a_click_goes_to_the_agent_and_to_its_tab_only_if_the_agent_has_gone() {
+        let world = Fake::with(None);
+        assert_eq!(attention::answer(&world, "w7:p2J", Some("w7:t2J")), Went::Agent);
+        assert_eq!(world.steps(), vec![Step::FocusAgent]);
+
+        let mut gone = Fake::with(None);
+        gone.agent_there = false;
+        assert_eq!(attention::answer(&gone, "w7:p2J", Some("w7:t2J")), Went::Tab);
+        assert_eq!(gone.steps(), vec![Step::FocusAgent, Step::FocusTab]);
+
+        let mut nowhere = Fake::with(None);
+        nowhere.agent_there = false;
+        assert_eq!(attention::answer(&nowhere, "w7:p2J", None), Went::Nowhere);
+    }
+}
