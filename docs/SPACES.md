@@ -25,6 +25,7 @@ grew out of them.
 | Read window titles | only with Screen Recording — 0 of 165 without it |
 | Switch a screen to another Space | half — `SLSManagedDisplaySetCurrentSpace`, no permission and no slide, but the old desktop's windows stay drawn; not used |
 | Have the Dock switch | yes — its own "Switch to Desktop N", pressed by the agent with Accessibility; 0.4–0.5s, and it slides |
+| Have the Dock switch without the slide | yes, almost always — a made-up trackpad swipe, posted by the agent; once in six runs watched, the screen did not follow |
 | Move **another process's** window to another Space | **no** — refused by every route tried |
 | Move a process's **own** window to another Space | yes, and back |
 | Add a desktop | yes — Mission Control's **+**, pressed through Accessibility; 0.8s, and it shows |
@@ -200,10 +201,46 @@ after all 17 of slingr's switches in the half hour before that. 15 logged
 `catch: "Arrived"` in `watch.jsonl`, and 2 stood aside mid-switch. The agent
 runs `follow` only on `activeSpaceDidChange`.
 
-An instant switch would have to be the Dock's own. InstantSpaceSwitcher posts
-the Dock a trackpad swipe with a near-zero distance and a high speed, one per
-desktop moved, and reports that the Dock then switches without the slide. Not
-yet tried here.
+An instant switch had to be the Dock's own, and is now: see below.
+
+### Switching instantly, through the Dock
+
+The agent swipes, as InstantSpaceSwitcher does (`DockSwipe` in
+`agent/main.swift`). It posts the Dock a made-up trackpad swipe — began,
+changed and ended — with fingers that have moved almost nowhere (0.000016 of
+the way) and are lifted fast (2000 per Space moved), one swipe per Space. The
+Dock commits to the switch with nothing left to animate, and since it is the
+Dock's own switch, the desktop being left is hidden. slingr-spaces asks for
+one first when the agent's menu has "Switch desktops instantly" ticked, as it
+is unless turned off, and the pointer is on the screen being switched: a swipe
+moves the screen under the pointer. Otherwise, or if the swipe has not landed
+in 0.8s, it presses the shortcut as before.
+
+Measured on 12 November, with someone watching the screen:
+
+- Every swipe landed where it was aimed, by SkyLight's account, and none left
+  a window on screen from a desktop not showing — including leaving ac-app,
+  which has windows of its own.
+- A jump of several Spaces is one swipe per Space, sent at once. Jumps left
+  showed nothing on the way. Jumps right put the first desktop passed on
+  screen for about 50ms, by WindowServer's account (its `SkyBridge` log marks
+  the window "visible"): t-shadcn on the way back from home, t-cors on the
+  way back from ac-app, twice each. Watching, it was seen once at most, and
+  "MUCH better than before".
+- Once, the screen did not follow. At 21:45 SkyLight said ac-app was showing
+  and `follow` arrived there, but the screen stayed on me-slingr, menu bar
+  included, for six seconds. WindowServer marked one of ac-app's two Brave
+  windows visible and left the other "occluded"; in every switch that showed,
+  both went visible, the second peeking out 100 pixels left of the first. The
+  same steps at 22:13 worked, by which time the main screen had gone from 15
+  desktops to 8 and InstantSpaceSwitcher had been run. Nothing slingr reads
+  tells this from a switch that worked, hence the menu item.
+- WindowServer logs "Failed to acquire window content assertion" with every
+  swipe, InstantSpaceSwitcher's included. It is not the sign of a failure.
+- Nothing has to sit in front of the Dock: the swipe worked with
+  InstantSpaceSwitcher's event tap running, and with it quit.
+- macOS 27 takes a different event, which InstantSpaceSwitcher has; the agent
+  refuses there rather than guess, and the shortcut is pressed.
 
 ### Moving a window is refused, three ways
 
@@ -366,13 +403,14 @@ Then, once:
 - Whether "Switch to Desktop N" acts on the screen under the pointer rather
   than the main screen. The pointer was on the main screen for every
   measurement; if not, the switch fails after 1.5s, and slingr says so.
+- Why one swipe on 12 November moved SkyLight's desktop but not the screen,
+  and how often that happens.
 
 ## What the next iterations could be
 
-- **Switching instantly, through the Dock**: InstantSpaceSwitcher's swipe,
-  posted by the agent in place of the shortcut. The Dock would make the
-  switch, so its desktop is hidden as it should be. Untested here: whether
-  a jump of several desktops, one swipe each, shows the ones in between.
+- **A jump to the right without the first desktop showing**: whether
+  InstantSpaceSwitcher's macOS 27 event, or a pause between swipes, avoids
+  the 50ms. Untested.
 
 - **Sling by dragging for you**: a synthetic mouse-down on the title bar, a
   desktop switch, a mouse-up. Needs Accessibility, flips Spaces visibly, and

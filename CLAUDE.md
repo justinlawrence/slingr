@@ -56,9 +56,10 @@ says which it will use.
   SkyLight and needs no permission. Switching is not its: only the Dock's own
   switch hides the desktop being left.
 - `agent/main.swift` — the menu-bar agent the Spaces backend runs under
-  launchd. It owns the three keys, presses the Dock's "Switch to Desktop N",
-  adds desktops through Mission Control and writes task names over its
-  "Desktop N" labels. It holds no state and makes no decisions.
+  launchd. It owns the three keys, switches desktops through the Dock — a
+  made-up trackpad swipe, with no slide, or else the Dock's "Switch to
+  Desktop N" — adds desktops through Mission Control, and writes task names
+  over its "Desktop N" labels. It holds no state and makes no decisions.
 - `src/attention.rs` — agents that want you: when to say so in a notification,
   and what a click on one does (`slingr notify`, `slingr answer`). Its flows
   are written against the `World` trait, for the same reason.
@@ -110,7 +111,9 @@ macOS Spaces, all set up by `./spaces.sh on`:
   belong to its signature, and have survived rebuilds and a move to another
   checkout.
 - The Dock's "Switch to Desktop N" shortcuts, ctrl-F1 to ctrl-F16, which the
-  agent presses.
+  agent presses when it does not swipe.
+- `switchInstantly` in the agent's preferences (`dev.slingr.agent`) — its
+  menu's "Switch desktops instantly". Absent means on.
 - `~/.local/state/slingr/spaces.json` — which desktop is which task's.
 
 slingr itself keeps nothing running. Its hooks are invoked by herdr, and by

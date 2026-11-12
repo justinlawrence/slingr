@@ -234,9 +234,11 @@ firing when they should, and both halves agreeing at the end.
 
 Open, in rough order of interest:
 
-- **The slide.** Every desktop switch is the Dock's, and the Dock slides. An
-  instant switch through SkyLight left the old desktop's windows drawn, so it
-  was taken out; the next idea is a synthetic Dock swipe (`SPACES.md`).
+- **The swipe.** Desktops now switch by a made-up trackpad swipe, which the
+  Dock makes with no slide. Once in six runs watched, the screen did not
+  follow, for no reason found; the agent's menu item "Switch desktops
+  instantly" puts the slide back. Jumps to the right show the first desktop
+  passed for about 50ms (`SPACES.md`).
 - **Desktops that outlive their tasks.** A closed tab's desktop stays claimed,
   and Mission Control is reported to stop at sixteen desktops a screen.
 - With AeroSpace, the board's drag-and-drop is covered by fakes but has never

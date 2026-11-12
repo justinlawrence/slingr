@@ -16,8 +16,8 @@
 // message, instead of stopping the binary from loading at all.
 //
 // Measured on macOS 26.6.2 with SIP on — see docs/SPACES.md. Reading needs no
-// permission at all. Switching is the Dock's, pressed by the agent: SkyLight
-// will switch for anyone, but does only half of it. Moving another process's
+// permission at all. Switching is the Dock's, swiped or pressed by the agent:
+// SkyLight will switch for anyone, but does only half of it. Moving another process's
 // window to a different Space is refused by every route tried, so there is no
 // command for it: one that could only ever fail would be a lie in the
 // interface.
@@ -254,6 +254,15 @@ enum Agent {
     static let switchDesktop = Notification.Name("dev.slingr.agent.switch-desktop")
     static let switchRefused = Notification.Name("dev.slingr.agent.switch-desktop.refused")
     static let refresh = Notification.Name("dev.slingr.agent.refresh")
+    static let swipeDesktop = Notification.Name("dev.slingr.agent.swipe-desktop")
+    static let swipeRefused = Notification.Name("dev.slingr.agent.swipe-desktop.refused")
+
+    /// The agent menu's "Switch desktops instantly", read from the agent's
+    /// own preferences. On unless it has been turned off.
+    static var switchesInstantly: Bool {
+        CFPreferencesAppSynchronize(bundle as CFString)
+        return CFPreferencesCopyAppValue("switchInstantly" as CFString, bundle as CFString) as? Bool ?? true
+    }
 
     static var running: Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
@@ -286,11 +295,57 @@ func desktopNumber(of space: UInt64, on display: DisplayOut) -> Int? {
     display.spaces.filter { $0.kind == "desktop" }.firstIndex { $0.id == space }.map { $0 + 1 }
 }
 
+/// Whether the pointer is on this screen. A Dock swipe moves whichever screen
+/// the pointer is on.
+func pointerIsOn(_ display: DisplayOut) -> Bool {
+    guard let at = CGEvent(source: nil)?.location else { return false }
+    var under: CGDirectDisplayID = 0
+    var count: UInt32 = 0
+    guard CGGetDisplaysWithPoint(at, 1, &under, &count) == .success, count > 0,
+          let uuid = CGDisplayCreateUUIDFromDisplayID(under)?.takeRetainedValue()
+    else { return false }
+    let id = CFUUIDCreateString(nil, uuid) as String
+    return id == display.id || (display.id == "Main" && under == CGMainDisplayID())
+}
+
+/// Have the agent swipe to the Space, as a trackpad would, but with no slide
+/// (agent/main.swift, `DockSwipe`). Still the Dock's own switch. Only when the
+/// agent's menu says to and the pointer is on that screen; false, with nothing
+/// switched, otherwise or if the screen did not move, so the shortcut can be
+/// pressed instead.
+///
+/// A swipe passes every Space, a full-screen window's included, so it is
+/// counted in Spaces rather than in Mission Control's desktop numbers.
+func swipeThroughDock(_ space: UInt64, on display: DisplayOut) -> Bool {
+    let order = display.spaces.map(\.id)
+    guard Agent.switchesInstantly, pointerIsOn(display),
+          let from = order.firstIndex(of: display.current), let to = order.firstIndex(of: space), from != to
+    else { return false }
+    var refused = false
+    let centre = DistributedNotificationCenter.default()
+    let listening = centre.addObserver(forName: Agent.swipeRefused, object: nil, queue: nil) { _ in refused = true }
+    defer { centre.removeObserver(listening) }
+    centre.postNotificationName(Agent.swipeDesktop, object: String(to - from), userInfo: nil, deliverImmediately: true)
+
+    // A swipe lands in about a tenth of a second. Past this it has not, and
+    // the shortcut is pressed instead.
+    let deadline = Date().addingTimeInterval(0.8)
+    while Date() < deadline {
+        slice()
+        if refused { return false }
+        if displays().first(where: { $0.id == display.id })?.current == space { return true }
+    }
+    return false
+}
+
 /// Have the agent press the Dock's own shortcut for the desktop, so the Dock
 /// makes the switch with everything a switch involves. Waits for the switch
 /// itself rather than a reply; a refusal arrives at once.
+///
+/// A swipe is asked for first, when the agent's menu says so.
 func switchThroughDock(_ space: UInt64, on display: DisplayOut) -> Bool {
     guard Agent.running, let n = desktopNumber(of: space, on: display) else { return false }
+    if swipeThroughDock(space, on: display) { return true }
     var refused = false
     let centre = DistributedNotificationCenter.default()
     let listening = centre.addObserver(forName: Agent.switchRefused, object: nil, queue: nil) { _ in refused = true }

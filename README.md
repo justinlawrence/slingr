@@ -42,7 +42,9 @@ To use macOS Spaces in place of AeroSpace:
 ```
 
 A small menu-bar agent then owns the same three keys and switches desktops
-by pressing the Dock's own "Switch to Desktop N". It asks for Accessibility,
+through the Dock: with a made-up trackpad swipe, which skips the slide, or by
+pressing the Dock's own "Switch to Desktop N" if "Switch desktops instantly"
+is unticked in its menu. It asks for Accessibility,
 which switching and adding desktops need, and for Screen Recording, without
 which the board shows application names where window titles should be.
 

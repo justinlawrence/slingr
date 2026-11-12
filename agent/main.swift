@@ -41,6 +41,16 @@ enum Names {
     static let switchDesktop = Notification.Name("dev.slingr.agent.switch-desktop")
     static let switchRefused = Notification.Name("dev.slingr.agent.switch-desktop.refused")
     static let refresh = Notification.Name("dev.slingr.agent.refresh")
+    static let swipeDesktop = Notification.Name("dev.slingr.agent.swipe-desktop")
+    static let swipeRefused = Notification.Name("dev.slingr.agent.swipe-desktop.refused")
+}
+
+/// The menu's "Switch desktops instantly": whether slingr-spaces asks for a
+/// swipe before pressing a shortcut. It reads this from the agent's own
+/// preferences, so the key is spelled the same there. On unless turned off.
+enum Instant {
+    static let key = "switchInstantly"
+    static var on: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
 }
 
 /// The Dock's own "Switch to Desktop N", pressed the way a hand would.
@@ -75,6 +85,60 @@ enum DockShortcut {
             }
             event.flags = flags
             event.post(tap: .cghidEventTap)
+        }
+        return nil
+    }
+}
+
+/// A trackpad swipe between desktops, made up and handed to the Dock in place
+/// of its shortcut: InstantSpaceSwitcher's way of switching without the slide
+/// (github.com/jurplel/InstantSpaceSwitcher, `Sources/ISS/ISS.c`). The fingers
+/// have moved almost nowhere and are lifted at speed, so the Dock commits to
+/// the switch with nothing left to animate. It is still the Dock's own switch,
+/// so it hides the desktop being left, which a switch through SkyLight did
+/// not. Measured on 12 November, with what went wrong once (docs/SPACES.md).
+enum DockSwipe {
+    // None of these is public; the numbers are ISS's.
+    private static let type = CGEventField(rawValue: 55)!        // kCGSEventTypeField
+    private static let hidType = CGEventField(rawValue: 110)!    // kCGEventGestureHIDType
+    private static let motion = CGEventField(rawValue: 123)!
+    private static let progress = CGEventField(rawValue: 124)!
+    private static let velocityX = CGEventField(rawValue: 129)!
+    private static let velocityY = CGEventField(rawValue: 130)!
+    private static let phase = CGEventField(rawValue: 132)!
+    private static let dockControl: Int64 = 30                   // kCGSEventDockControl
+    private static let dockSwipe: Int64 = 23                     // kIOHIDEventTypeDockSwipe
+    private static let horizontal: Int64 = 1
+
+    /// Nil once posted; otherwise why not. Positive steps go right, to later
+    /// desktops. One swipe moves one desktop, so a jump is a swipe per step,
+    /// each at a speed that grows with the jump, as ISS does.
+    static func swipe(steps: Int) -> String? {
+        guard steps != 0, abs(steps) < 16 else { return "a swipe moves 1 to 15 desktops" }
+        guard AXIsProcessTrusted() else { return "slingr agent needs Accessibility" }
+        // macOS 27 takes a different event, which ISS has and this does not.
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27 else {
+            return "macOS 27 needs another kind of swipe"
+        }
+        let sign: Double = steps > 0 ? 1 : -1
+        // The smallest travel that still has a direction: ISS found a full one
+        // switches too, but shows the desktop being left first.
+        let travel = sign * 0.000016
+        let speed = sign * 2000 * Double(abs(steps))
+        for _ in 0..<abs(steps) {
+            // Began, changed and ended. ISS found that with only two, Mission
+            // Control stopped working.
+            for stage: Int64 in [1, 2, 4] {
+                guard let event = CGEvent(source: nil) else { return "could not make a swipe" }
+                event.setIntegerValueField(type, value: dockControl)
+                event.setIntegerValueField(hidType, value: dockSwipe)
+                event.setIntegerValueField(phase, value: stage)
+                event.setDoubleValueField(progress, value: travel)
+                event.setIntegerValueField(motion, value: horizontal)
+                event.setDoubleValueField(velocityX, value: speed)
+                event.setDoubleValueField(velocityY, value: speed)
+                event.post(tap: .cgSessionEventTap)
+            }
         }
         return nil
     }
@@ -640,6 +704,7 @@ final class Agent: NSObject, NSApplicationDelegate {
         distributed.addObserver(self, selector: #selector(addDesktop), name: Names.addDesktop, object: nil)
         distributed.addObserver(self, selector: #selector(switchDesktop(_:)), name: Names.switchDesktop, object: nil)
         distributed.addObserver(self, selector: #selector(refreshRequested), name: Names.refresh, object: nil)
+        distributed.addObserver(self, selector: #selector(swipeDesktop(_:)), name: Names.swipeDesktop, object: nil)
 
         // Titles on the board need Screen Recording, and asking is the only
         // way to be listed in System Settings at all. macOS asks once.
@@ -663,6 +728,10 @@ final class Agent: NSObject, NSApplicationDelegate {
         // application forward to pick whichever of its windows it likes.
         menu.addItem(withTitle: "Allow Accessibility…", action: #selector(askAccessibility), keyEquivalent: "")
             .target = self
+        let instant = menu.addItem(
+            withTitle: "Switch desktops instantly", action: #selector(toggleInstant(_:)), keyEquivalent: "")
+        instant.target = self
+        instant.state = Instant.on ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit slingr agent", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         return menu
@@ -769,6 +838,31 @@ final class Agent: NSObject, NSApplicationDelegate {
         } else {
             log("pressed Desktop \(n)")
         }
+    }
+
+    /// slingr asking for a swipe of so many Spaces: right for positive, left
+    /// for negative. As with `switchDesktop`, a request can only ever move
+    /// between desktops, because the Dock's swipe is the only thing posted.
+    @objc private func swipeDesktop(_ note: Notification) {
+        guard let steps = (note.object as? String).flatMap(Int.init) else { return }
+        if let why = DockSwipe.swipe(steps: steps) {
+            log("did not swipe \(steps): \(why)")
+            // So slingr presses the shortcut at once, rather than wait out the
+            // swipe it is not getting.
+            DistributedNotificationCenter.default()
+                .postNotificationName(Names.swipeRefused, object: why, userInfo: nil, deliverImmediately: true)
+        } else {
+            log("swiped \(steps)")
+        }
+    }
+
+    /// The swipe can be turned off from the menu, should a switch ever do
+    /// nothing you can see, as one did on 12 November (docs/SPACES.md).
+    @objc private func toggleInstant(_ item: NSMenuItem) {
+        let on = !Instant.on
+        UserDefaults.standard.set(on, forKey: Instant.key)
+        item.state = on ? .on : .off
+        log(on ? "switching desktops instantly, by swipe" : "switching desktops by shortcut, with the slide")
     }
 
     /// slingr changed which task a desktop is for — `bind`, or a claim — and

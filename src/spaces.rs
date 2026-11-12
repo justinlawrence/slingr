@@ -652,10 +652,19 @@ mod tests {
             "dev.slingr.agent.switch-desktop",
             "dev.slingr.agent.switch-desktop.refused",
             "dev.slingr.agent.refresh",
+            "dev.slingr.agent.swipe-desktop",
+            "dev.slingr.agent.swipe-desktop.refused",
+            // Not a notification: the preference behind the agent's "Switch
+            // desktops instantly", which the helper reads.
+            "switchInstantly",
         ] {
             assert!(helper.contains(&format!("\"{name}\"")), "slingr-spaces never uses {name}");
             assert!(agent.contains(&format!("\"{name}\"")), "the agent never uses {name}");
         }
+        // Both read a missing preference the same way, or the menu's tick
+        // would say one thing while switching did the other.
+        assert!(helper.contains("as? Bool ?? true"), "slingr-spaces reads switchInstantly as on by default");
+        assert!(agent.contains("as? Bool ?? true"), "the agent reads switchInstantly as on by default");
         // libc's `pause()` takes nothing and waits for a signal, so a Swift
         // `pause()` meaning anything else calls it instead — and the helper
         // waits for ever, which is how the first build of this hung.
