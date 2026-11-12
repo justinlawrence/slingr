@@ -1,5 +1,5 @@
 #!/bin/sh
-# Try macOS Spaces in place of AeroSpace, and go back. See docs/SPACES.md.
+# Use macOS Spaces in place of AeroSpace, or go back. See docs/SPACES.md.
 #
 #   ./spaces.sh on    build here; stop AeroSpace; point slingr, herdr's hook and
 #                     ~/.local/bin/slingr at this checkout; start the agent
@@ -51,6 +51,23 @@ print(" ".join(str(i) for i in range(121, 134) if not keys.get(str(i), {}).get("
   echo "Switch to Desktop 4-16: ctrl-F4 to ctrl-F16, wherever not already set (${off:-none needed})."
 }
 
+# bootout returns before launchd has finished taking the old agent down, and
+# a bootstrap in that gap fails with "5: Input/output error" — seen on 12
+# November, which left no agent running at all. So the bootstrap is retried
+# until launchd lets go, for up to five seconds, and the last try says why.
+start_agent() {
+  launchctl bootout "$domain/$label" 2>/dev/null || true
+  tries=0
+  until launchctl bootstrap "$domain" "$plist" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 10 ]; then
+      launchctl bootstrap "$domain" "$plist"
+      return 1
+    fi
+    sleep 0.5
+  done
+}
+
 # herdr wants an absolute path, so the manifest is generated, as install.sh does.
 link_herdr() {
   sed "s|SLINGR_BINARY|$1/target/release/slingr|" \
@@ -70,16 +87,16 @@ on)
   sed -e "s|SLINGR_AGENT|$root/target/release/SlingrAgent.app/Contents/MacOS/slingr-agent|" \
       -e "s|SLINGR_LOG|$HOME/.local/state/slingr/agent.log|" \
       agent/dev.slingr.agent.plist.example > "$plist"
-  launchctl bootout "$domain/$label" 2>/dev/null || true
-  launchctl bootstrap "$domain" "$plist"
+  start_agent
   dock_shortcuts
   cat <<EOF
 
 Spaces on. AeroSpace is stopped, and the agent owns ctrl-alt-cmd-s/i/b.
-  - Add desktops in Mission Control: a task claims an empty one on its first
-    visit, so make as many as you have tasks on the go.
-  - Allow Screen Recording for "slingr agent" when asked, or the board shows
-    application names where titles should be.
+  - A task takes an empty desktop on its first visit, or has the agent add
+    one through Mission Control's + when none is free.
+  - Allow Accessibility and Screen Recording for "slingr agent" when asked:
+    Accessibility is what switches and adds desktops, and without Screen
+    Recording the board shows application names where titles should be.
   - slingr spaces     every desktop and the task it is for
   - slingr bind NAME  make the desktop you are on a task
   - ./spaces.sh off   back to AeroSpace
