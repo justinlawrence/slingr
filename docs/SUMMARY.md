@@ -4,7 +4,7 @@ A condensed read of [`SPEC.md`](SPEC.md) — enough to pick the work back up
 without reading all of it. The spec carries the argument behind each decision;
 [`FINDINGS.md`](FINDINGS.md) carries the AeroSpace and herdr behaviour those
 decisions work around, and is the one to read before changing anything that
-touches either.
+touches either. [`SPACES.md`](SPACES.md) does the same for macOS Spaces.
 
 ## What it is
 
@@ -12,8 +12,13 @@ Work is task-shaped, not application-shaped. A task is a herdr tab plus the
 handful of windows that belong with it — a browser window, a terminal, whatever
 else. macOS cannot hold that grouping: Cmd+Tab switches applications, the window
 list is unordered, and Mission Control stacks same-application windows on each
-other. So each task gets one AeroSpace workspace, and slingr is how a window
-gets into the right one and how you get there yourself.
+other. So each task gets one AeroSpace workspace or one macOS desktop, and
+slingr is how a window gets into the right one and how you get there yourself.
+
+There are two backends behind one trait, chosen in `workspaces.toml`. macOS
+Spaces is the one in daily use. There macOS will not let slingr move another
+application's window to a different desktop, so windows get onto theirs
+through Mission Control, and slingr is how you get there.
 
 Finding a *known* window is already solved, by AltTab. slingr is only for
 keeping them grouped.
@@ -33,9 +38,9 @@ keeping them grouped.
 - The second screen is not in the rotation. It watches a long-running build and
   is glanced at, not switched to.
 
-The task list is merged on each open from four sources: AeroSpace (workspaces
-holding windows, with counts), herdr (`herdr tab list`, about 7ms), `seen.json`,
-and `workspaces.toml`. A tab renamed in herdr is slingable the next time the
+The task list is merged on each open from four sources: the window manager
+(workspaces or desktops holding windows, with counts), herdr (`herdr tab list`,
+about 7ms), `seen.json`, and `workspaces.toml`. A tab renamed in herdr is slingable the next time the
 panel opens, with nothing to edit.
 
 ## The four surfaces
@@ -72,10 +77,15 @@ Every mode's front door carries the tab strip; every step after it does not.
 Switching mode halfway through answering "which windows" is not something anyone
 means to do.
 
+With Spaces, where nothing can be moved, the panel offers only **jump** and
+the **board**, and the board goes where you click instead of taking drags.
+
 ## Windows that belong everywhere
 
-AeroSpace has no sticky windows, so this is emulated by moving windows by id —
-no focus change, no workspace change, about 55ms each. Three kinds, because
+With Spaces this is macOS's own All Desktops, set from an application's Dock
+menu, and slingr leaves it alone. AeroSpace has no sticky windows, so there
+this is emulated by moving windows by id — no focus change, no workspace
+change, about 55ms each. Three kinds, because
 "belongs everywhere" is sometimes about a window and sometimes about an
 application:
 
@@ -106,11 +116,15 @@ Two rules about when they move, both of them bugs first:
 ## Both directions
 
 A task is a herdr tab *and* a workspace, so arriving at either brings the other.
-Nothing stays resident — both halves are callbacks run by something already
-running:
+slingr keeps nothing resident — both halves are callbacks run by something
+already running:
 
-- AeroSpace's `exec-on-workspace-change` runs `slingr follow`
+- AeroSpace's `exec-on-workspace-change` runs `slingr follow`, or with Spaces
+  the menu-bar agent does, when macOS reports a desktop change
 - a herdr plugin's `tab.focused` hook runs `slingr goto`
+
+The agent is resident, but holds no state and decides nothing: it stands
+where AeroSpace stood.
 
 Arriving is done by focusing the window you were typing in, rather than asking
 for the workspace and then correcting focus — one operation, with nothing to
@@ -149,7 +163,17 @@ Cost, measured in `watch.jsonl`: about 900ms per switch before this work, about
 themselves, roughly 55ms apiece. **The only lever left on flashing is how many
 windows follow you** — which is what grounding is for.
 
-## Surviving a restart
+## When an agent wants you
+
+On macOS, a click on herdr's own notification only brings the terminal
+forward. So herdr's `pane.agent_status_changed` hook runs `slingr notify`,
+which posts "needs input" or "has finished" through terminal-notifier, and a
+click runs `slingr answer`. That brings the agent's pane to the front, and
+`goto` follows it to the task. herdr's popups are off, its rules kept: a
+second's wait, nothing about the tab in front of you, and a notification taken
+down once its agent moves on.
+
+## Surviving an AeroSpace restart
 
 AeroSpace does not remember which workspace a window belongs to; restart it and
 an evening's sorting is gone. `slingr restore` asks the action log *before* the
@@ -165,11 +189,15 @@ purpose. Measured on a real reboot: 43 windows in one pile, 29 put back.
 |---|---|
 | `src/picker.rs` | the rules, no I/O: parsing, naming, grouping, menu building |
 | `src/app.rs` | the flows, against the `WindowManager` and `Prompt` traits |
+| `src/wm.rs` | the `WindowManager` trait, and which backend answers it |
 | `src/watch.rs` | what a workspace change asks of the hook (`Catch`, `look_again`) |
 | `src/store.rs` | follow list, pins, echo (`Settling`), snapshots, action log |
-| `src/aerospace.rs`, `src/herdr.rs`, `src/dialog.rs`, `src/panel.rs` | the impure edges, thin on purpose |
-| `src/main.rs` | the CLI, and the two hook entry points `goto_now` / `follow_now` |
+| `src/attention.rs` | agent notifications: when to say so, and what a click does |
+| `src/aerospace.rs`, `src/spaces.rs`, `src/herdr.rs`, `src/dialog.rs`, `src/panel.rs` | the impure edges, thin on purpose |
+| `src/main.rs` | the CLI, and the hook entry points `goto_now`, `follow_now` and `notify_from_hook` |
 | `panel/main.swift` | presentation only; rows in as JSON, chosen ids out |
+| `spaces/main.swift` | `slingr-spaces`: reads macOS Spaces through SkyLight, needs no permission |
+| `agent/main.swift` | the Spaces backend's menu-bar agent: the keys, the Dock's desktop switch, names over Mission Control |
 | `tests/flow.rs` | whole flows against fakes — assert *ordering* here |
 
 The field spelling between Rust and Swift is pinned by a test in `src/panel.rs`:
@@ -177,33 +205,43 @@ a renamed field is not a compile error in Swift, it is a value that silently
 never arrives.
 
 State lives under `~/.local/state/slingr/` — `follow.json`, `pins.json`,
-`layout.json`, `actions.jsonl`, `watch.jsonl`, `seen.json`. `slingr paths`
+`layout.json`, `actions.jsonl`, `watch.jsonl`, `seen.json`, and with Spaces
+`spaces.json`, `attention.json` and the agent's `agent.log`. `slingr paths`
 prints them, and says whether the panel binary is where it is expected; a silent
 fallback to the AppleScript dialog usually means it is not.
 
 ## Build and test
 
 ```sh
-./build.sh      # cargo build --release AND swiftc the panel
+./build.sh      # cargo build --release AND swiftc the panel, Spaces helper and agent
 ./install.sh    # the above, plus the symlink and the herdr plugin
-cargo test      # 130 tests, none of which need AeroSpace or a screen
+./spaces.sh on  # build, then run slingr, herdr's hooks and the agent from here; `off` goes back to AeroSpace
+cargo test      # 185 tests, none of which need a window manager or a screen
 ```
 
 `cargo build` alone does not build the panel.
 
 ## Where it stands
 
-Last commit `4e099e2` (24 Sep 2026), **one ahead of `origin/main`** — the
-flashing fix is local and unpushed. 130 tests green (69 lib, 61 flow).
+As of 12 November: macOS Spaces is the backend in daily use, live since 26
+October and merged into main that day, with AeroSpace kept as the other.
+Agents that want you are announced in notifications a click takes you
+through. 185 tests green.
 
-Verified live: four tab switches and a double-tap, every `follow` reporting
-`Arrived` with nothing moved, both guards firing when they should, and both
-halves agreeing at the end.
+The flashing fix was verified live with AeroSpace: four tab switches and a
+double-tap, every `follow` reporting `Arrived` with nothing moved, both guards
+firing when they should, and both halves agreeing at the end.
 
 Open, in rough order of interest:
 
-- The board's drag-and-drop is covered by fakes but has never been exercised by
-  eye. Confirming a tidy-up of a dozen windows is the obvious next thing to do.
+- **The slide.** Every desktop switch is the Dock's, and the Dock slides. An
+  instant switch through SkyLight left the old desktop's windows drawn, so it
+  was taken out; the next idea is a synthetic Dock swipe (`SPACES.md`).
+- **Desktops that outlive their tasks.** A closed tab's desktop stays claimed,
+  and Mission Control is reported to stop at sixteen desktops a screen.
+- With AeroSpace, the board's drag-and-drop is covered by fakes but has never
+  been exercised by eye. Confirming a tidy-up of a dozen windows is the obvious
+  next thing to do there.
 - Whether grounding a Finder window reads as natural in use, and whether
   `GLOBAL_BY_NATURE` should become a list in `workspaces.toml` that a person can
   add to. What it must not become is a rule that guesses.

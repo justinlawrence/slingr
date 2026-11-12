@@ -17,8 +17,14 @@ Two pieces answer this, and they are separate:
   letters, Enter. It searches across both browsers and all profiles, which is
   strictly better than Chrome's own tab search (`Cmd+Shift+A`), which is
   per-profile.
-- **Keeping windows grouped by task** — AeroSpace workspaces, one per task.
-  This is what sling is for.
+- **Keeping windows grouped by task** — AeroSpace workspaces, or macOS
+  desktops, one per task. This is what sling is for.
+
+This spec was written around AeroSpace, and most of what it says about moving
+windows is AeroSpace's. macOS's own Spaces are the other backend, and the one
+in daily use since 26 October; [`SPACES.md`](SPACES.md) says what changes
+with them, starting with the largest: macOS will not let slingr move another
+application's window to a different desktop.
 
 ## The model
 
@@ -323,12 +329,18 @@ skipped, and were it not, the return trip finds the workspace already correct
 and stops there. Both sides are idempotent, so the worst case is one wasted
 round trip rather than an oscillation.
 
-Nothing stays resident. Both halves are callbacks, run by something already
-running:
+slingr keeps nothing resident. Both halves are callbacks, run by something
+already running:
 
 - AeroSpace's `exec-on-workspace-change` runs `slingr follow`, so windows that
   belong everywhere catch up on any workspace change, whatever caused it.
 - A herdr plugin's `tab.focused` hook runs `slingr goto`.
+
+With Spaces, AeroSpace's half is the agent's: a menu-bar app that runs
+`slingr follow` when macOS reports a desktop change. It is resident, but holds
+no state and decides nothing. launchd starts it again after a crash, and its
+menu-bar item names the task in front, so a missing agent is a missing name
+rather than a silence — what the watcher below never had.
 
 A resident watcher was written first and removed. It was worse on the merits:
 it died during a debugging session and stayed dead, and a watcher that has

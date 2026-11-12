@@ -95,7 +95,9 @@ pub enum Synced {
 pub enum Backend {
     #[default]
     AeroSpace,
-    /// macOS Spaces, one per task. An experiment — see `docs/SPACES.md`.
+    /// macOS Spaces, one per task — see `docs/SPACES.md`. AeroSpace stays
+    /// the default: a config with no `backend` means AeroSpace, as it always
+    /// has.
     Spaces,
 }
 

@@ -2,7 +2,7 @@
 name = "slingr"
 version = "0.1.0"
 edition = "2021"
-description = "Throw a window at a task. A workspace picker for AeroSpace."
+description = "Throw a window at a task. A workspace picker for AeroSpace or macOS Spaces."
 
 [dependencies]
 anyhow = "1"

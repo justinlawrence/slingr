@@ -3,7 +3,7 @@
 //! The flow is written against traits (`WindowManager`, `Prompt`) so it can be
 //! driven without a window manager or a screen. See `docs/SPEC.md` for what
 //! this is for and `docs/FINDINGS.md` for the constraints the design works
-//! around; `docs/SPACES.md` for the experiment with macOS Spaces.
+//! around; `docs/SPACES.md` for the macOS Spaces backend.
 
 pub mod aeroconf;
 pub mod aerospace;

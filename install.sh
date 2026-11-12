@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build, put `slingr` on PATH, and wire up the two hooks.
 #
-# Nothing here runs resident: AeroSpace and herdr invoke slingr themselves.
+# This sets up AeroSpace, where nothing runs resident: AeroSpace and herdr
+# invoke slingr themselves. For macOS Spaces, run ./spaces.sh on instead.
 set -e
 cd "$(dirname "$0")"
 root="$(pwd -P)"
@@ -36,6 +37,8 @@ config-version = 2:
   ctrl-alt-cmd-i = 'exec-and-forget $HOME/.local/bin/slingr jump'
 
 Then: aerospace reload-config && slingr sync
+
+Or use macOS Spaces in place of AeroSpace: ./spaces.sh on (docs/SPACES.md).
 
 slingr now says when an agent wants you, in a notification that goes to it
 when clicked (needs terminal-notifier: brew install terminal-notifier). Turn

@@ -1,13 +1,16 @@
 # macOS Spaces, one per task
 
-An experiment: does a task feel more natural as a native macOS Space than as
-an AeroSpace workspace? The draw is that macOS keeps a window on its Space by
-itself — nothing of ours has to remember it, and nothing restarting can forget
-it — and that Mission Control and ctrl-arrow would at last group by task, which
-is the whole reason the board exists.
+Begun on 26 October as an experiment: does a task feel more natural as a
+native macOS Space than as an AeroSpace workspace? The draw is that macOS
+keeps a window on its Space by itself — nothing of ours has to remember it,
+and nothing restarting can forget it — and that Mission Control and
+ctrl-arrow would at last group by task, which is the whole reason the board
+exists.
 
-Kept apart from `FINDINGS.md` while it is an experiment. If it stays, the
-measurements below belong there.
+It was judged the better of the two, and on 12 November merged as the backend
+in daily use. AeroSpace stays the other one, and `./spaces.sh off` goes back
+to it. The measurements below stay here rather than in `FINDINGS.md`, because
+they are about this backend alone.
 
 ## What macOS allows, measured
 
