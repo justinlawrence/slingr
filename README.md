@@ -210,6 +210,7 @@ not.
 
 ## Documentation
 
+- [`docs/SUMMARY.md`](docs/SUMMARY.md) — the whole thing in one page
 - [`docs/SPEC.md`](docs/SPEC.md) — what this is for and the model behind it
 - [`docs/FINDINGS.md`](docs/FINDINGS.md) — AeroSpace and macOS behaviour that
   is not in any documentation, and which the design works around

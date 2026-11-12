@@ -4,6 +4,9 @@ slingr: a window picker for AeroSpace, built around tasks rather than
 applications. Named to match herdr, which it pairs with. A task is usually a herdr tab, and the windows that belong with
 it live in one AeroSpace workspace.
 
+**Read `docs/SUMMARY.md` for the one-page version** — the model, the four
+surfaces, the guards that stop the flashing, and where it stands.
+
 **Read `docs/SPEC.md` first** — what this is for and why it is shaped as it is.
 **Read `docs/FINDINGS.md` before changing anything that touches AeroSpace or
 herdr.** It records behaviour that is in neither project's documentation, found
